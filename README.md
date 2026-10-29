@@ -219,16 +219,17 @@ flowchart LR
 Any callable that takes `RawDocumentContent` and returns a JSON-compatible value can be an adapter. The adapter is trusted application code; its output is untrusted.
 
 - **Library calls:** malformed batches raise before claim storage.
+- **Runs:** a run's accepted claims are committed together. A run ID that already has a committed result is refused before the adapter is called.
 - **The model-run workflow:** every outcome, including failures, becomes a run record.
 
 See [architecture and contracts](docs/architecture.md) for exact semantics, and [failure analysis](docs/failure-analysis.md) for the out-of-order correction bug this design guards against.
 
 ## Engineering tradeoffs
 
-- **One temporal resolver:** in-memory and JSONL document backends use the same version-selection logic. Tests permute insertion order and check reopened storage.
-- **Permanent identities:** document revisions get new version IDs; evidence anchors resolve exact versions. Equal-timestamp revision ties raise an explicit ambiguity.
+- **One temporal resolver:** in-memory and JSONL document backends use the same version-selection logic. One contract test suite runs every backend, including a reopened JSONL file, through all insertion orders, both query modes and scoped lineage queries.
+- **Permanent identities:** document revisions get new version IDs, evidence anchors resolve exact versions, and a chunk must quote the version it names. Equal-timestamp revision ties raise an explicit ambiguity, and a run ID is committed at most once.
 - **Evidence normalized before it is validated:** a FACT built from an empty iterator, a string or raw dictionaries is refused at construction. Storage independently refuses a FACT without supporting references.
-- **Partial item acceptance:** an invalid item does not discard its valid siblings. Batch-shape errors fail before storing claims.
+- **Partial item acceptance, atomic commit:** an invalid item does not discard its valid siblings, and a run's accepted claims are stored together or not at all. Batch-shape errors fail before storing claims.
 - **Inspectable attribution:** a `FACT` with no explicit citation is attributed to the input document. This is a disclosed convenience, never semantic verification.
 - **Provider behind the adapter boundary:** the Claude adapter is an optional extra. Request building, response parsing and replay need neither the SDK nor a network, so the default install and every test stay offline.
 - **Citations checked, not constrained:** the output schema leaves source and chunk IDs as free strings, so a fabricated citation reaches the deterministic provenance checks rather than being prevented by decoding.
@@ -241,8 +242,8 @@ See [architecture and contracts](docs/architecture.md) for exact semantics, and 
 - **Prompt injection:** the schema has no tool-dispatch path, and the prompt treats documents as data. This reduces prompt injection but does not prevent it, because false or malicious prose can still satisfy the schema. The evaluation's one embedded instruction is a test case, not a defense.
 - **Cost:** cost figures are estimates from API-reported tokens and list prices retrieved on 2026-10-28, not invoices.
 - **Timestamps:** availability timestamps must be established upstream; uncertain-availability envelopes are not implemented. Version selection uses latest eligible timestamps, while supersession fields are validated annotations, not independent interval filters.
-- **Storage:** JSONL is a single-writer reference backend without crash atomicity or locking. Claims live in memory unless the caller stores the returned audit report or run record.
-- **Assertions, not attestations:** user-provided timestamps and labels are assertions, not attested metadata. Input and response hashes identify content; they are not signatures.
+- **Storage:** JSONL is a single-writer, append-only reference backend without fsync, crash atomicity or locking. Claims live in memory unless the caller stores the returned audit report or run record.
+- **Assertions, not attestations:** user-provided timestamps and labels are assertions, not attested metadata. Repositories refuse a recording time later than their clock but cannot detect a backdated one. Input and response hashes identify content; they are not signatures.
 
 ## Origin and attribution
 

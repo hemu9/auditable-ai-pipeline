@@ -2,11 +2,11 @@
 
 ## Data flow and trust
 
-`SourceDocument` stores the raw text, content hash, permanent version identity and timing assertions. Construction validates the hash and temporal field ordering. Metadata is deep-frozen so later mutation of the caller's dictionary cannot change a stored document. `SourceChunk` anchors an exact document version and carries its own hash and timestamps.
+`SourceDocument` stores the raw text, content hash, permanent version identity and timing assertions. Construction validates the hash and temporal field ordering. Metadata is deep-frozen so later mutation of the caller's dictionary cannot change a stored document. `SourceChunk` anchors an exact document version and carries its own hash and timestamps. Registration requires the chunk's text to occur in that version, so an anchor cannot quote text its parent does not contain.
 
 `EvidenceExtractor` passes only the raw-content wrapper to an injected callable. The callable is executable application code, not a security sandbox. Returning well-formed data cannot grant tools or execute instructions through this library: the schema has no tool-dispatch path. This does not establish resistance to semantic prompt injection; malicious or false prose can still satisfy the schema.
 
-The returned value is snapshotted as finite JSON before validation. Unknown top-level fields or invalid batch shapes raise `ExtractionValidationError`. Valid batches are processed item by item. Unknown item fields, malformed values and failed provenance checks become explicit rejections; valid siblings can still be stored. A run is not a database transaction.
+The returned value is snapshotted as finite JSON before validation. Unknown top-level fields or invalid batch shapes raise `ExtractionValidationError`. Valid batches are processed item by item. Unknown item or citation fields, malformed values and failed provenance checks become explicit rejections; valid siblings can still be stored. Accepted items are validated first and then committed together, so a run is stored completely or not at all. A run ID that already has a committed result is refused before the adapter is called; a malformed batch or adapter exception stores nothing and leaves its run ID unused. Storage read errors, such as an unreadable or unparseable JSONL row, propagate instead of being reported as item rejections.
 
 ## Evidence checks
 
@@ -25,7 +25,7 @@ Document repositories group versions by logical `source_id` and select the lates
 | `RESEARCH_AS_OF(T)` | `publicly_available_at <= T` | What source version was publicly knowable? |
 | `OPERATIONAL_REPLAY_AS_OF(T)` | `recorded_at <= T` | What source version had this system recorded? |
 
-A later backfill can change the result of a newly executed research query. It cannot change a previously written report. Operational replay uses system recording time, so late ingestion never makes data appear recorded earlier. The two questions are intentionally different.
+A later backfill can change the result of a newly executed research query. It cannot change a previously written report. Operational replay filters on `recorded_at`, the recording time asserted by whoever writes a record. Repositories and the extractor refuse a recording time later than their injected clock, but they cannot detect a backdated one: replaying a migration legitimately reloads historical recording times in any order. Live ingestion should therefore stamp `recorded_at` from a trusted clock. The two questions are intentionally different.
 
 `superseded_publicly_at` and `superseded_in_system_at` are validated annotations retained from the extracted record shape. The resolver selects versions from eligible timestamps; it does **not** independently filter on those annotations. Equal winning timestamps are ambiguous and raise an error. Scoped queries restrict the complete logical lineage before resolving revisions so a tie in an unrelated source does not block the query.
 
@@ -96,6 +96,6 @@ Cost estimates multiply the per-attempt token usage the API reports by the list 
 
 ## Storage and scope
 
-The in-memory and JSONL source stores share the same resolver. JSONL reconstructs validated records on read and preserves earlier row contents on additions, but reads and rewrites the entire file. It is appropriate for this small single-process demo, not concurrent or large production workloads. Claims themselves use an in-memory repository.
+The in-memory and JSONL source stores share the same resolver and chunk-registration checks. JSONL reconstructs validated records on read and appends one row per addition without rewriting earlier rows, but every call re-reads the entire file. A crash can leave a torn final row, which fails loudly on the next read instead of being skipped. It is appropriate for this small single-process demo, not concurrent or large production workloads. Claims themselves use an in-memory repository.
 
 The core package depends only on Python's standard library. The optional `claude` extra adds the official Anthropic SDK, which only the live transport imports. No private system imports, data providers or domain decision components are needed. Exact public-availability timestamps are upstream assertions; an uncertain date must not be silently represented as precise. Until uncertainty envelopes exist, only run strict historical queries on sources with established exact timestamps.
