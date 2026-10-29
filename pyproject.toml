@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auditable-ai-pipeline"
+version = "0.1.0"
+description = "Source-attributed AI extraction with deterministic validation, immutable document versions, and historical replay."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Samuel He"}]
+dependencies = []
+keywords = ["llm", "provenance", "evaluation", "historical-replay", "data-quality"]
+
+[project.optional-dependencies]
+dev = ["ruff==0.17.3", "build==1.6.1"]
+
+[project.scripts]
+auditable-ai = "auditable_ai.cli:main"
+
+[project.urls]
+Repository = "https://github.com/hemu9/auditable-ai-pipeline"
+Issues = "https://github.com/hemu9/auditable-ai-pipeline/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+auditable_ai = ["fixtures/*.json"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
