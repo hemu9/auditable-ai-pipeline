@@ -396,7 +396,19 @@ def record_entries(records: Iterable[Mapping[str, Any]], dataset: Dataset) -> li
             "cost": record.get("cost"),
             "served_model": (record.get("response") or {}).get("served_model"),
         }
-        replay = replay_record(record)
+        try:
+            replay = replay_record(record)
+        except (KeyError, ValueError) as exc:  # includes ProvenanceError for tampered records
+            message = f"{type(exc).__name__}: {exc}"
+            entries.append(
+                {
+                    **entry,
+                    "status": "integrity_error",
+                    "result": None,
+                    "diagnostics": {"message": message},
+                }
+            )
+            continue
         if record["task"]["version"] != TASK_VERSION:
             status = "task_version_mismatch"
         elif replay["status"] == "not_replayable":

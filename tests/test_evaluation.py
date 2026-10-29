@@ -209,6 +209,23 @@ class RecordedRuns(unittest.TestCase):
         with self.assertRaises(ValueError):
             settings_of([first, second])
 
+    def test_a_tampered_record_is_reported_as_an_integrity_failure_not_a_crash(self):
+        dataset = load_dataset()
+        document = dataset.document("eval-call-center-v1")
+        record = run_model_extraction(
+            document,
+            transport=ScriptedTransport(response(message_body(call_center_output()))),
+            clock=fixed_clock,
+        )
+        exchange = record["exchange"]
+        tampered = {
+            **record,
+            "exchange": {**exchange, "raw_response": exchange["raw_response"].replace("6", "7")},
+        }
+        entries = record_entries([tampered], dataset)
+        self.assertEqual(entries[0]["status"], "integrity_error")
+        self.assertIn("hash", entries[0]["diagnostics"]["message"])
+
 
 class PublishedResults(unittest.TestCase):
     def test_the_baseline_results_in_the_documentation_are_current(self):

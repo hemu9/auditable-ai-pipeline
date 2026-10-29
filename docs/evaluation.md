@@ -61,7 +61,7 @@ One evaluation figure (a "preliminary count" the report gives as its own) is ann
 
 Every run's output first passes through the existing deterministic validator. A batch-level failure stops the run, and item rejections are reported as schema and provenance outcomes. Only accepted `FACT` claims are scored semantically; inferences are counted as out of task.
 
-Each accepted fact is labeled by comparing the numbers written in its `claim_text` with the annotations, using only the sentences it cites. Rules apply in this order:
+Each accepted fact is labeled by comparing the numbers written in its `claim_text` with the annotations, using only the sentences it cites. A citation of the whole document version, without a chunk ID, cites no sentence. Rules apply in this order:
 
 | Label | Rule | Counts toward |
 |---|---|---|
