@@ -1,18 +1,30 @@
+"""Evidence anchors pass the same integrity checks in every chunk backend."""
+
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from auditable_ai import ProvenanceError, RawDocumentContent, SourceChunk
+from auditable_ai import (
+    InMemorySourceChunkRepository,
+    InMemorySourceDocumentRepository,
+    ProvenanceError,
+    TemporalIntegrityError,
+)
 from auditable_ai.storage import JsonlSourceChunkRepository, JsonlSourceDocumentRepository
-from tests.helpers import at, setup
+from tests.helpers import at, chunk, setup
 
 
 class SourceIntegrity(unittest.TestCase):
     def test_document_content_must_match_its_supplied_hash(self):
         _, documents, _ = setup()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ProvenanceError):
             replace(documents.get_version("pilot-v1"), content_hash="incorrect")
+
+    def test_chunk_content_must_match_its_supplied_hash(self):
+        anchor = chunk("count", "pilot-v2", "24 sensors", public="15", recorded="20")
+        with self.assertRaises(ProvenanceError):
+            replace(anchor, content_hash="incorrect")
 
     def test_caller_mutation_cannot_change_nested_metadata(self):
         _, documents, _ = setup()
@@ -23,59 +35,101 @@ class SourceIntegrity(unittest.TestCase):
         with self.assertRaises(TypeError):
             document.metadata["new"] = "mutation"
 
-    def test_chunk_anchor_remains_bound_to_original_after_a_correction(self):
-        _, documents, claims = setup()
-        raw = RawDocumentContent("36 sensors")
-        chunk = SourceChunk(
-            "original-count",
-            "pilot-v1",
-            "sentence 1",
-            raw,
-            raw.content_hash(),
-            at("01"),
-            at("10"),
-            at("10"),
-        )
-        claims.chunks.add(chunk)
-        self.assertEqual(documents.research_as_of(at("25"))[0].document_version_id, "pilot-v2")
-        self.assertEqual(claims.chunks.get("original-count").document_version_id, "pilot-v1")
 
-    def test_chunk_storage_reopens_with_same_evidence_and_rejects_duplicate_identity(self):
-        _, documents, _ = setup()
-        raw = RawDocumentContent("24 sensors")
-        chunk = SourceChunk(
-            "count", "pilot-v2", "sentence 1", raw, raw.content_hash(), at("15"), at("20"), at("20")
-        )
-        with TemporaryDirectory() as tmp:
-            document_path = Path(tmp) / "documents.jsonl"
-            chunk_path = Path(tmp) / "chunks.jsonl"
-            disk_documents = JsonlSourceDocumentRepository(document_path)
-            for name in ("pilot-v1", "pilot-v2"):
-                disk_documents.add(documents.get_version(name))
-            disk_chunks = JsonlSourceChunkRepository(chunk_path, documents=disk_documents)
-            disk_chunks.add(chunk)
-            reopened = JsonlSourceChunkRepository(
-                chunk_path, documents=JsonlSourceDocumentRepository(document_path)
+class ChunkRepositoryContract:
+    """Every chunk backend must pass these checks; subclass it for a new backend."""
+
+    def new_repositories(self, **options):
+        raise NotImplementedError
+
+    def reopen(self, chunks):
+        return chunks
+
+    def setUp(self):
+        _, fixtures, _ = setup()
+        self.documents, self.chunks = self.new_repositories()
+        for name in ("pilot-v1", "pilot-v2"):
+            self.documents.add(fixtures.get_version(name))
+
+    def test_anchor_remains_bound_to_its_version_after_a_correction(self):
+        anchor = chunk("original-count", "pilot-v1", "36 sensors", public="01", recorded="10")
+        self.chunks.add(anchor)
+        self.assertEqual(self.documents.research_as_of(at("25"))[0].document_version_id, "pilot-v2")
+        stored = self.reopen(self.chunks)
+        self.assertEqual(stored.get("original-count"), anchor)
+        self.assertEqual(stored.for_document_version("pilot-v1"), (anchor,))
+        self.assertEqual(stored.for_document_version("pilot-v2"), ())
+        self.assertIsNone(stored.get("missing"))
+
+    def test_duplicate_chunk_identity_is_refused(self):
+        anchor = chunk("count", "pilot-v2", "24 sensors", public="15", recorded="20")
+        self.chunks.add(anchor)
+        with self.assertRaises(ProvenanceError):
+            self.reopen(self.chunks).add(anchor)
+
+    def test_unknown_parent_version_is_refused(self):
+        orphan = chunk("unknown", "missing-version", "24 sensors", public="15", recorded="20")
+        with self.assertRaises(ProvenanceError):
+            self.chunks.add(orphan)
+
+    def test_chunk_cannot_predate_its_document_version(self):
+        for public, recorded in (("14", "20"), ("15", "19")):
+            early = chunk(
+                f"early-{public}-{recorded}",
+                "pilot-v2",
+                "24 sensors",
+                public=public,
+                recorded=recorded,
             )
-            self.assertEqual(reopened.get("count"), chunk)
-            with self.assertRaises(ValueError):
-                reopened.add(chunk)
+            with self.subTest(public=public, recorded=recorded):
+                with self.assertRaises(TemporalIntegrityError):
+                    self.chunks.add(early)
 
-    def test_unknown_chunk_parent_is_rejected_by_both_backends(self):
-        _, documents, claims = setup()
-        raw = RawDocumentContent("unknown source")
-        chunk = SourceChunk(
-            "unknown",
-            "missing-version",
-            "sentence 1",
-            raw,
-            raw.content_hash(),
-            at("15"),
-            at("20"),
-            at("20"),
+    def test_chunk_must_quote_the_version_it_names(self):
+        for text in ("24 sensors were installed", ""):
+            misanchored = chunk(
+                f"misanchored-{len(text)}", "pilot-v1", text, public="01", recorded="10"
+            )
+            with self.subTest(text=text), self.assertRaises(ProvenanceError):
+                self.chunks.add(misanchored)
+        self.assertEqual(self.reopen(self.chunks).for_document_version("pilot-v1"), ())
+
+    def test_recording_time_cannot_be_later_than_the_clock(self):
+        documents, chunks = self.new_repositories(clock=lambda: at("21"))
+        documents.add(self.documents.get_version("pilot-v2"))
+        with self.assertRaises(TemporalIntegrityError):
+            chunks.add(chunk("late", "pilot-v2", "24 sensors", public="15", recorded="22"))
+        chunks.add(chunk("current", "pilot-v2", "24 sensors", public="15", recorded="21"))
+        stored = self.reopen(chunks).for_document_version("pilot-v2")
+        self.assertEqual([anchor.chunk_id for anchor in stored], ["current"])
+
+
+class InMemoryChunks(ChunkRepositoryContract, unittest.TestCase):
+    def new_repositories(self, **options):
+        documents = InMemorySourceDocumentRepository(**options)
+        return documents, InMemorySourceChunkRepository(documents, **options)
+
+
+class JsonlChunks(ChunkRepositoryContract, unittest.TestCase):
+    def setUp(self):
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        self.paths = {}
+        super().setUp()
+
+    def new_repositories(self, **options):
+        document_path = self.directory / f"documents-{len(self.paths)}.jsonl"
+        chunk_path = self.directory / f"chunks-{len(self.paths)}.jsonl"
+        documents = JsonlSourceDocumentRepository(document_path, **options)
+        chunks = JsonlSourceChunkRepository(chunk_path, documents=documents, **options)
+        self.paths[chunks] = (document_path, chunk_path)
+        return documents, chunks
+
+
+class ReopenedJsonlChunks(JsonlChunks):
+    def reopen(self, chunks):
+        document_path, chunk_path = self.paths[chunks]
+        return JsonlSourceChunkRepository(
+            chunk_path, documents=JsonlSourceDocumentRepository(document_path)
         )
-        with TemporaryDirectory() as tmp:
-            disk = JsonlSourceChunkRepository(Path(tmp) / "chunks.jsonl", documents=documents)
-            for backend in (claims.chunks, disk):
-                with self.assertRaises(ProvenanceError):
-                    backend.add(chunk)

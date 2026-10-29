@@ -13,9 +13,9 @@ This repository has two kinds of check, and they answer different questions.
 
 The cases cover valid attribution with opposing evidence, a fabricated citation with a valid sibling, an unexpected command field, a supplied content-hash mismatch, a well-formed false claim, future input, invalid confidence and unresolved negative evidence.
 
-The false-claim case is expected to be accepted with `accuracy_status=NOT_VERIFIED`. It tests an explicit limitation: existence and timing of a citation do not prove the claim is supported. Counting that case as "a hallucination prevented" would be incorrect.
+The false-claim case is expected to be accepted. It tests an explicit limitation: existence and timing of a citation do not prove the claim is supported. Every report labels its results `accuracy_status=NOT_VERIFIED` because no semantic check exists; the label is a constant, not a validator outcome. Counting that case as "a hallucination prevented" would be incorrect.
 
-Unit and integration tests additionally exercise out-of-order revisions, both query modes, backend parity, ambiguity, immutable identities, source/chunk temporal dependencies, conflicting claims, response snapshots, hashes and report overwrite refusal. Their counts describe software checks, not model quality or investment performance.
+Unit and integration tests additionally exercise out-of-order revisions, both query modes, a contract suite shared by every storage backend, ambiguity, immutable identities, chunk containment and temporal dependencies, clock bounds, run identity and atomic commits, conflicting claims, response snapshots, hashes and report overwrite refusal. Their counts describe software checks, not model quality or investment performance.
 
 ## figure-extraction-v1
 

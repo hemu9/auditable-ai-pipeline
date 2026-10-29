@@ -65,7 +65,7 @@
         "facts": [{"claim_text": "The report states that 900 sensors were installed.", "supporting_evidence": [{"source_id": "pilot-v2"}]}],
         "source_ids": ["pilot-v2"]
       },
-      "expected": {"accepted": 1, "rejected": 0, "accuracy_status": "NOT_VERIFIED"},
+      "expected": {"accepted": 1, "rejected": 0},
       "limitation": "This claim is false relative to the document but passes structure and provenance checks. Semantic verification is outside this validator."
     },
     {

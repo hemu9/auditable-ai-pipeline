@@ -25,5 +25,11 @@ class AmbiguousRevisionError(TemporalIntegrityError):
     pass
 
 
+class DuplicateRunError(ProvenanceError):
+    """A run identity already has a committed result; a later run never merges into it."""
+
+    pass
+
+
 class ExtractionValidationError(ValueError):
     """An extraction response cannot be validated as a batch."""

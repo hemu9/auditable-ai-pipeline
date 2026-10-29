@@ -16,7 +16,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from auditable_ai.anthropic_adapter import (
     ClaudeExtractionAdapter,
@@ -178,7 +178,7 @@ def _outcome(status: str, result: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def replay_record(
-    record: dict[str, Any], *, clock: Callable[[], datetime] = _utc_now
+    record: Mapping[str, Any], *, clock: Callable[[], datetime] = _utc_now
 ) -> dict[str, Any]:
     """Re-validate a recorded response under the current validator, without a model call."""
     document = document_from_entry(record["document"])

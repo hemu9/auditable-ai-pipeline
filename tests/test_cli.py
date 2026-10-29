@@ -106,6 +106,30 @@ class PublicWalkthrough(unittest.TestCase):
             self.assertEqual(main(["demo", "--output", str(path)]), 2)
             self.assertEqual(path.read_bytes(), original)
 
+    def test_unwritable_report_path_is_a_clear_error(self):
+        errors = StringIO()
+        with TemporaryDirectory() as tmp, redirect_stdout(StringIO()), redirect_stderr(errors):
+            path = Path(tmp) / "missing" / "audit.json"
+            self.assertEqual(main(["demo", "--output", str(path)]), 2)
+        self.assertIn("Cannot write report", errors.getvalue())
+
+    def test_fixture_command_fails_when_a_scenario_regresses(self):
+        data = fixture_data()
+        data["cases"][0]["expected"]["accepted"] = 99
+        output = StringIO()
+        with mock.patch("auditable_ai.cli.fixture_data", return_value=data):
+            with redirect_stdout(output):
+                self.assertEqual(main(["check-fixtures"]), 1)
+        self.assertIn("FAIL valid_with_unknown_and_counterevidence", output.getvalue())
+        self.assertIn("7/8 validator regression scenarios", output.getvalue())
+
+    def test_unexpected_scenario_error_is_a_failure(self):
+        data = fixture_data()
+        data["cases"][0]["source_as_of"] = "2026-04-14T12:00:00+00:00"
+        check = check_cases(data)[0]
+        self.assertFalse(check["passed"])
+        self.assertEqual(check["observed"], {"error": "ExtractionValidationError"})
+
     def test_fixture_command_labels_its_results_as_validator_regressions(self):
         output = StringIO()
         with redirect_stdout(output):

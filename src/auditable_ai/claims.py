@@ -10,15 +10,18 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Sequence
 
 from auditable_ai.documents import SourceChunkRepository, SourceDocumentRepository
-from auditable_ai.errors import ProvenanceError
+from auditable_ai.errors import DuplicateRunError, ProvenanceError
 from auditable_ai.temporal import (
     AppendOnlyStore,
     AsOfMode,
+    Clock,
     require_dependent_not_before_dependency,
+    require_not_in_future,
     require_timezone_aware,
+    utc_now,
     validate_temporal_fields,
 )
 
@@ -108,15 +111,24 @@ class ClaimRepository:
     """Append-only claims with exact source-version checks.
 
     Two disagreeing claims are separate identities; neither replaces the
-    other. Querying public source availability is distinct from asking when
-    this system recorded a model result. No claim-revision policy is defined.
+    other. Each run is committed once, with all of its claims together.
+    Querying public source availability is distinct from asking when this
+    system recorded a model result. No claim-revision policy is defined.
     """
 
-    def __init__(self, documents: SourceDocumentRepository, chunks: SourceChunkRepository) -> None:
+    def __init__(
+        self,
+        documents: SourceDocumentRepository,
+        chunks: SourceChunkRepository,
+        *,
+        clock: Clock = utc_now,
+    ) -> None:
         self.documents = documents
         self.chunks = chunks
-        self._store = AppendOnlyStore(key_fn=lambda claim: claim.claim_id)
+        self.clock = clock
+        self._store: AppendOnlyStore[Claim] = AppendOnlyStore(key_fn=lambda claim: claim.claim_id)
         self._by_id: dict[str, Claim] = {}
+        self._run_ids: set[str] = set()
 
     def validate_reference(
         self,
@@ -156,9 +168,8 @@ class ClaimRepository:
         ):
             raise ProvenanceError("supplied evidence hash does not match the referenced content")
 
-    def add(self, claim: Claim) -> None:
-        if claim.claim_id in self._by_id:
-            raise ProvenanceError("claim identity already exists; use a new run id")
+    def validate_evidence(self, claim: Claim) -> None:
+        """Check a claim's evidence without storing anything; every commit repeats this."""
         if not all(
             isinstance(group, tuple) and all(isinstance(item, EvidenceReference) for item in group)
             for group in (claim.supporting_evidence, claim.counterevidence)
@@ -172,8 +183,39 @@ class ClaimRepository:
                 publicly_available_at=claim.publicly_available_at,
                 recorded_at=claim.recorded_at,
             )
-        self._store.add(claim)
-        self._by_id[claim.claim_id] = claim
+
+    def has_run(self, run_id: str) -> bool:
+        return run_id in self._run_ids
+
+    def add(self, claim: Claim) -> None:
+        """Commit a single-claim run."""
+        self.add_run(claim.run_id, (claim,))
+
+    def add_run(self, run_id: str, claims: Sequence[Claim]) -> None:
+        """Commit one run's claims together or not at all; a run identity is used once."""
+        if self.has_run(run_id):
+            raise DuplicateRunError(
+                f"run_id {run_id!r} already has a committed result; runs are never merged"
+            )
+        seen: set[str] = set()
+        for claim in claims:
+            if claim.run_id != run_id:
+                raise ProvenanceError(
+                    f"claim {claim.claim_id!r} belongs to run {claim.run_id!r}, not {run_id!r}"
+                )
+            if claim.claim_id in self._by_id or claim.claim_id in seen:
+                raise ProvenanceError(
+                    f"claim identity {claim.claim_id!r} already exists; claims are never overwritten"
+                )
+            seen.add(claim.claim_id)
+            require_not_in_future(
+                f"claim {claim.claim_id!r} recorded_at", claim.recorded_at, self.clock
+            )
+            self.validate_evidence(claim)
+        for claim in claims:
+            self._store.add(claim)
+            self._by_id[claim.claim_id] = claim
+        self._run_ids.add(run_id)
 
     def get(self, claim_id: str) -> Claim | None:
         return self._by_id.get(claim_id)

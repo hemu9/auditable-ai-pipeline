@@ -18,7 +18,10 @@ from auditable_ai.errors import ProvenanceError
 from auditable_ai.temporal import (
     AppendOnlyStore,
     AsOfMode,
+    Clock,
     require_dependent_not_before_dependency,
+    require_not_in_future,
+    utc_now,
     validate_temporal_fields,
 )
 
@@ -65,14 +68,14 @@ class SourceDocument:
         )
         object.__setattr__(self, "metadata", deep_freeze(self.metadata))
         if self.content_hash != self.raw_content.content_hash():
-            raise ValueError(
+            raise ProvenanceError(
                 f"content_hash {self.content_hash!r} does not match the actual hash of raw_content ({self.raw_content.content_hash()!r}); provenance would be unverifiable"
             )
 
 
 @dataclass(frozen=True)
 class SourceChunk:
-    """An exact version-bound evidence anchor with independently checked content and times."""
+    """An excerpt of one exact version; repositories check its text and times on add."""
 
     chunk_id: str
     document_version_id: str
@@ -94,9 +97,32 @@ class SourceChunk:
             superseded_in_system_at=self.superseded_in_system_at,
         )
         if self.content_hash != self.raw_text.content_hash():
-            raise ValueError(
+            raise ProvenanceError(
                 f"content_hash {self.content_hash!r} does not match the actual hash of raw_text ({self.raw_text.content_hash()!r})"
             )
+
+
+def validate_chunk_registration(
+    chunk: SourceChunk, document: Optional[SourceDocument], clock: Clock
+) -> None:
+    """Checks every chunk backend applies before storing an evidence anchor."""
+    if document is None:
+        raise ProvenanceError(
+            f"SourceChunk {chunk.chunk_id!r} references document_version_id {chunk.document_version_id!r}, which does not exist"
+        )
+    require_dependent_not_before_dependency(
+        dependent_publicly_available_at=chunk.publicly_available_at,
+        dependent_recorded_at=chunk.recorded_at,
+        dependency_publicly_available_at=document.publicly_available_at,
+        dependency_recorded_at=document.recorded_at,
+        dependent_label=f"SourceChunk {chunk.chunk_id!r}",
+        dependency_label=f"its document version {document.document_version_id!r}",
+    )
+    if not chunk.raw_text.text or chunk.raw_text.text not in document.raw_content.text:
+        raise ProvenanceError(
+            f"SourceChunk {chunk.chunk_id!r} text does not occur in document version {document.document_version_id!r}; an evidence anchor must quote the version it names"
+        )
+    require_not_in_future(f"SourceChunk {chunk.chunk_id!r} recorded_at", chunk.recorded_at, clock)
 
 
 class SourceDocumentRepository(ABC):
@@ -132,15 +158,21 @@ class SourceDocumentRepository(ABC):
 class InMemorySourceDocumentRepository(SourceDocumentRepository):
     """Append new version identities without rewriting existing documents."""
 
-    def __init__(self) -> None:
-        self._store = AppendOnlyStore(key_fn=lambda d: d.source_id)
+    def __init__(self, *, clock: Clock = utc_now) -> None:
+        self._store: AppendOnlyStore[SourceDocument] = AppendOnlyStore(key_fn=lambda d: d.source_id)
         self._by_version: dict[str, SourceDocument] = {}
+        self._clock = clock
 
     def add(self, document: SourceDocument) -> None:
         if document.document_version_id in self._by_version:
-            raise ValueError(
+            raise ProvenanceError(
                 f"document_version_id {document.document_version_id!r} already exists; version identities are permanent and never reused"
             )
+        require_not_in_future(
+            f"document version {document.document_version_id!r} recorded_at",
+            document.recorded_at,
+            self._clock,
+        )
         self._store.add(document)
         self._by_version[document.document_version_id] = document
 
@@ -171,6 +203,8 @@ class InMemorySourceDocumentRepository(SourceDocumentRepository):
 
 
 class SourceChunkRepository(ABC):
+    """Storage contract for evidence anchors; add() applies validate_chunk_registration."""
+
     @abstractmethod
     def add(self, chunk: SourceChunk) -> None: ...
 
@@ -182,25 +216,18 @@ class SourceChunkRepository(ABC):
 
 
 class InMemorySourceChunkRepository(SourceChunkRepository):
-    def __init__(self, document_repository: SourceDocumentRepository) -> None:
+    def __init__(
+        self, document_repository: SourceDocumentRepository, *, clock: Clock = utc_now
+    ) -> None:
         self._documents = document_repository
         self._chunks: dict[str, SourceChunk] = {}
+        self._clock = clock
 
     def add(self, chunk: SourceChunk) -> None:
         if chunk.chunk_id in self._chunks:
-            raise ValueError(f"chunk_id {chunk.chunk_id!r} already exists")
-        document = self._documents.get_version(chunk.document_version_id)
-        if document is None:
-            raise ProvenanceError(
-                f"SourceChunk {chunk.chunk_id!r} references document_version_id {chunk.document_version_id!r}, which does not exist"
-            )
-        require_dependent_not_before_dependency(
-            dependent_publicly_available_at=chunk.publicly_available_at,
-            dependent_recorded_at=chunk.recorded_at,
-            dependency_publicly_available_at=document.publicly_available_at,
-            dependency_recorded_at=document.recorded_at,
-            dependent_label=f"SourceChunk {chunk.chunk_id!r}",
-            dependency_label=f"its document version {document.document_version_id!r}",
+            raise ProvenanceError(f"chunk_id {chunk.chunk_id!r} already exists")
+        validate_chunk_registration(
+            chunk, self._documents.get_version(chunk.document_version_id), self._clock
         )
         self._chunks[chunk.chunk_id] = chunk
 

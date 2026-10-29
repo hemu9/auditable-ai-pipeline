@@ -10,6 +10,7 @@ from auditable_ai.documents import (
 )
 from auditable_ai.errors import (
     AmbiguousRevisionError,
+    DuplicateRunError,
     ExtractionValidationError,
     ProvenanceError,
     TemporalIntegrityError,
@@ -24,6 +25,7 @@ __all__ = [
     "Claim",
     "ClaimCategory",
     "ClaimRepository",
+    "DuplicateRunError",
     "EvidenceExtractor",
     "EvidenceReference",
     "ExtractionResult",

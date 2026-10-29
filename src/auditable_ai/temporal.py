@@ -10,7 +10,16 @@ from __future__ import annotations
 
 import datetime as dt
 from enum import Enum
-from typing import Callable, Hashable, Iterable, Optional, Protocol, TypeVar, runtime_checkable
+from typing import (
+    Callable,
+    Generic,
+    Hashable,
+    Iterable,
+    Optional,
+    Protocol,
+    TypeVar,
+    runtime_checkable,
+)
 
 from auditable_ai.errors import AmbiguousRevisionError, TemporalIntegrityError
 
@@ -24,11 +33,19 @@ class AsOfMode(Enum):
 
 @runtime_checkable
 class TemporalRecord(Protocol):
-    publicly_available_at: dt.datetime
-    recorded_at: dt.datetime
+    @property
+    def publicly_available_at(self) -> dt.datetime: ...
+
+    @property
+    def recorded_at(self) -> dt.datetime: ...
 
 
-T = TypeVar("T")
+T = TypeVar("T", bound=TemporalRecord)
+Clock = Callable[[], dt.datetime]
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
 
 
 def timestamp_for_mode(record: TemporalRecord, mode: AsOfMode) -> dt.datetime:
@@ -105,6 +122,16 @@ def require_timezone_aware(name: str, value: Optional[dt.datetime]) -> None:
         )
 
 
+def require_not_in_future(name: str, value: dt.datetime, clock: Clock) -> None:
+    """Refuse a recording time later than the writer's clock; backdating stays undetectable."""
+    now = clock()
+    require_timezone_aware("clock()", now)
+    if value > now:
+        raise TemporalIntegrityError(
+            f"{name} ({value}) is later than the clock ({now}); a record cannot be written before its own recording time"
+        )
+
+
 def validate_temporal_fields(
     *,
     ingested_at: dt.datetime,
@@ -137,27 +164,27 @@ def validate_temporal_fields(
         )
 
 
-class AppendOnlyStore:
+class AppendOnlyStore(Generic[T]):
     """In-memory immutable-version collection sharing the historical resolver."""
 
-    def __init__(self, key_fn: Callable[[object], Hashable]) -> None:
+    def __init__(self, key_fn: Callable[[T], Hashable]) -> None:
         self._key_fn = key_fn
-        self._records: list[object] = []
+        self._records: list[T] = []
 
-    def add(self, record: object) -> None:
+    def add(self, record: T) -> None:
         self._records.append(record)
 
-    def all(self) -> list[object]:
+    def all(self) -> list[T]:
         return list(self._records)
 
-    def history_for_key(self, key: Hashable) -> list[object]:
+    def history_for_key(self, key: Hashable) -> list[T]:
         return [r for r in self._records if self._key_fn(r) == key]
 
-    def as_of(self, as_of: dt.datetime, mode: AsOfMode) -> list[object]:
+    def as_of(self, as_of: dt.datetime, mode: AsOfMode) -> list[T]:
         return resolve_current_per_key(self._records, self._key_fn, as_of, mode)
 
     def as_of_matching(
-        self, as_of: dt.datetime, mode: AsOfMode, predicate: Callable[[object], bool]
-    ) -> list[object]:
+        self, as_of: dt.datetime, mode: AsOfMode, predicate: Callable[[T], bool]
+    ) -> list[T]:
         scoped = [r for r in self._records if predicate(r)]
         return resolve_current_per_key(scoped, self._key_fn, as_of, mode)

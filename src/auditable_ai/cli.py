@@ -7,6 +7,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from auditable_ai.anthropic_adapter import (
     DEFAULT_EFFORT,
@@ -237,7 +238,7 @@ def _evaluate(args: argparse.Namespace) -> int:
     dataset = load_dataset()
     documents = dataset.split(args.split)
     if args.system == "baseline":
-        system = {"name": "rule_baseline", "origin": "rule_based"}
+        system: dict[str, Any] = {"name": "rule_baseline", "origin": "rule_based"}
         entries = offline_entries("rule_baseline", documents)
     else:
         if args.system == "live":
@@ -278,6 +279,9 @@ def _write_output(path: Path | None, report: dict, exit_code: int) -> int:
             f"Report already exists: {path}. Choose a new path to preserve audit history.",
             file=sys.stderr,
         )
+        return 2
+    except OSError as exc:
+        print(f"Cannot write report {path}: {exc.strerror or exc}", file=sys.stderr)
         return 2
     return exit_code
 
