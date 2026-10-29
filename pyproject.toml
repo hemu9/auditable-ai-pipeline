@@ -15,6 +15,7 @@ dependencies = []
 keywords = ["llm", "provenance", "evaluation", "historical-replay", "data-quality"]
 
 [project.optional-dependencies]
+claude = ["anthropic>=2.3,<3"]
 dev = ["ruff==0.17.3", "build==1.6.1"]
 
 [project.scripts]
