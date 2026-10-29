@@ -25,12 +25,20 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-      - name: Test historical queries and validation boundaries
+      - name: Test without the optional SDK (SDK tests skip; nothing calls a model)
         run: python -m unittest discover -s tests -t . -v
-      - name: Run the public walkthrough and regression scenarios
+      - name: Run the walkthrough, regression scenarios, example and baseline evaluation
         run: |
           auditable-ai demo --output "$RUNNER_TEMP/demo.json"
           auditable-ai check-fixtures
+          python examples/quickstart.py
+          auditable-ai evaluate --system baseline --split eval --output "$RUNNER_TEMP/baseline.json"
+      - name: Test the Claude adapter through the real SDK over a mocked HTTP layer
+        shell: bash
+        run: |
+          python -m pip install -e '.[claude]'
+          python -m unittest tests.test_anthropic_adapter -v 2>&1 | tee "$RUNNER_TEMP/sdk-tests.log"
+          if grep -q "skipped" "$RUNNER_TEMP/sdk-tests.log"; then echo "SDK tests were skipped"; exit 1; fi
       - name: Build and smoke-test the distributable
         if: matrix.python-version == '3.12'
         run: |
@@ -40,3 +48,5 @@ jobs:
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/wheel-env/bin/auditable-ai" demo
           "$RUNNER_TEMP/wheel-env/bin/auditable-ai" check-fixtures
+          "$RUNNER_TEMP/wheel-env/bin/auditable-ai" evaluate --system baseline
+          "$RUNNER_TEMP/wheel-env/bin/python" "$GITHUB_WORKSPACE/examples/quickstart.py"

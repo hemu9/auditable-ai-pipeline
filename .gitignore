@@ -12,4 +12,5 @@ htmlcov/
 .env
 .env.*
 reports/
+runs/
 .DS_Store

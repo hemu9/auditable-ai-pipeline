@@ -33,6 +33,42 @@ class ExtractionBoundary(unittest.TestCase):
         self.assertEqual(result.claims[0].supporting_evidence[0].source_id, "pilot-v2")
         self.assertEqual(result.to_dict()["accuracy_status"], "NOT_VERIFIED")
 
+    def test_fact_evidence_is_normalized_before_it_is_validated(self):
+        result, _, claims = extract({"facts": [{"claim_text": "24 sensors"}]}, run_id="seed")
+        attributed = result.claims[0]
+        cases = (
+            iter(()),
+            (reference for reference in ()),
+            [],
+            "pilot-v2",
+            [{"source_id": "pilot-v2"}],
+        )
+        for number, evidence in enumerate(cases):
+            claim_id = f"unattributed-{number}"
+            with self.subTest(evidence=repr(evidence)):
+                with self.assertRaises(ValueError):
+                    claims.add(replace(attributed, claim_id=claim_id, supporting_evidence=evidence))
+                self.assertIsNone(claims.get(claim_id))
+        rebuilt = replace(attributed, supporting_evidence=iter(attributed.supporting_evidence))
+        self.assertEqual(rebuilt.supporting_evidence, attributed.supporting_evidence)
+
+    def test_claim_text_collections_must_hold_strings(self):
+        result, _, _ = extract({"facts": [{"claim_text": "24 sensors"}]})
+        for field, value in (
+            ("missing_information", "unmeasured"),
+            ("contradicting_claim_ids", [7]),
+        ):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                replace(result.claims[0], **{field: value})
+
+    def test_storage_refuses_a_fact_without_supporting_evidence(self):
+        result, _, claims = extract({"facts": [{"claim_text": "24 sensors"}]}, run_id="seed")
+        unattributed = replace(result.claims[0], claim_id="bypassed")
+        object.__setattr__(unattributed, "supporting_evidence", ())
+        with self.assertRaises(ProvenanceError):
+            claims.add(unattributed)
+        self.assertIsNone(claims.get("bypassed"))
+
     def test_fabricated_citation_does_not_discard_a_valid_sibling(self):
         bundle = setup()
         case = bundle[0]["cases"][1]

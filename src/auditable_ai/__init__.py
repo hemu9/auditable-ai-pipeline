@@ -17,7 +17,7 @@ from auditable_ai.errors import (
 from auditable_ai.extraction import EvidenceExtractor, ExtractionResult
 from auditable_ai.temporal import AsOfMode
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "AmbiguousRevisionError",
     "AsOfMode",
