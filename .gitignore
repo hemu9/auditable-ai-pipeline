@@ -9,6 +9,7 @@ dist/
 htmlcov/
 .pytest_cache/
 .ruff_cache/
+.hypothesis/
 .env
 .env.*
 reports/
