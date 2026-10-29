@@ -39,6 +39,8 @@ jobs:
           python -m pip install -e '.[claude]'
           python -m unittest tests.test_anthropic_adapter -v 2>&1 | tee "$RUNNER_TEMP/sdk-tests.log"
           if grep -q "skipped" "$RUNNER_TEMP/sdk-tests.log"; then echo "SDK tests were skipped"; exit 1; fi
+      - name: Type-check in strict mode against the installed SDK
+        run: mypy
       - name: Build and smoke-test the distributable
         if: matrix.python-version == '3.12'
         run: |

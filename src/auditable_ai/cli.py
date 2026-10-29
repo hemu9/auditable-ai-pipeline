@@ -18,7 +18,7 @@ from auditable_ai.anthropic_adapter import (
     ClaudeSettings,
     redact,
 )
-from auditable_ai.dataset import load_dataset, load_document_file
+from auditable_ai.dataset import DatasetDocument, load_dataset, load_document_file
 from auditable_ai.evaluation import (
     build_report,
     format_report,
@@ -59,7 +59,7 @@ def _positive_seconds(text: str) -> float:
     return value
 
 
-def _demo(data: dict) -> dict:
+def _demo(data: dict[str, Any]) -> dict[str, Any]:
     print("Auditable AI Pipeline | synthetic documents + scripted responses")
     print("No model call. Acceptance checks structure and provenance, not accuracy.\n")
     documents, _claims = repositories(data)
@@ -105,7 +105,7 @@ def _demo(data: dict) -> dict:
     }
 
 
-def _check_fixtures(data: dict) -> tuple[dict, int]:
+def _check_fixtures(data: dict[str, Any]) -> tuple[dict[str, Any], int]:
     checks = check_cases(data)
     for check in checks:
         print(f"{'PASS' if check['passed'] else 'FAIL'} {check['case']}")
@@ -117,7 +117,7 @@ def _check_fixtures(data: dict) -> tuple[dict, int]:
     return report, 0 if passed == len(checks) else 1
 
 
-def _print_result(result: dict | None) -> None:
+def _print_result(result: dict[str, Any] | None) -> None:
     if result is None:
         return
     for claim in result["claims"]:
@@ -134,7 +134,7 @@ def _print_result(result: dict | None) -> None:
         print(f"  COUNTEREVIDENCE: {reference['source_id']}")
 
 
-def _describe_run(record: dict) -> None:
+def _describe_run(record: dict[str, Any]) -> None:
     exchange = record.get("exchange") or {}
     response = record.get("response") or {}
     usage = response.get("usage") or {}
@@ -227,7 +227,9 @@ def _replay(args: argparse.Namespace) -> int:
     return _write_output(args.output, replay, exit_code)
 
 
-def _live_records(args: argparse.Namespace, documents: tuple) -> list[dict] | None:
+def _live_records(
+    args: argparse.Namespace, documents: tuple[DatasetDocument, ...]
+) -> list[dict[str, Any]] | None:
     if not args.live:
         print(
             "evaluate --system live calls the Anthropic API for every document and repetition "
@@ -286,7 +288,7 @@ def _evaluate(args: argparse.Namespace) -> int:
     return _write_output(args.output, report, 0 if report["runs"]["scored"] else 1)
 
 
-def _write_output(path: Path | None, report: dict, exit_code: int) -> int:
+def _write_output(path: Path | None, report: dict[str, Any], exit_code: int) -> int:
     if path is None:
         return exit_code
     try:

@@ -18,9 +18,10 @@ from auditable_ai.extraction import EvidenceExtractor, ExtractionResult
 
 
 def fixture_data() -> dict[str, Any]:
-    return json.loads(
+    data: dict[str, Any] = json.loads(
         files("auditable_ai").joinpath("fixtures/scenarios.json").read_text(encoding="utf-8")
     )
+    return data
 
 
 def repositories(data: dict[str, Any]) -> tuple[InMemorySourceDocumentRepository, ClaimRepository]:

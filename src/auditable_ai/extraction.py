@@ -99,7 +99,9 @@ class ExtractionResult:
     validator_version: str = VALIDATOR_VERSION
 
     def to_dict(self) -> dict[str, Any]:
-        value = json.loads(json.dumps(asdict(self), default=_json_default, allow_nan=False))
+        value: dict[str, Any] = json.loads(
+            json.dumps(asdict(self), default=_json_default, allow_nan=False)
+        )
         value["raw_response"] = json.loads(value.pop("raw_response_json"))
         value["accuracy_status"] = "NOT_VERIFIED"
         value["source_query_mode"] = "RESEARCH_AS_OF"

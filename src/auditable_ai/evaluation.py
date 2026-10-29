@@ -77,7 +77,9 @@ def _reference(document: DatasetDocument, chunk_id: str) -> dict[str, Any]:
     }
 
 
-def _response(document: DatasetDocument, facts: list, unknowns: list) -> dict[str, Any]:
+def _response(
+    document: DatasetDocument, facts: list[dict[str, Any]], unknowns: list[str]
+) -> dict[str, Any]:
     return {
         "facts": facts,
         "inferences": [],
