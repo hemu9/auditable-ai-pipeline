@@ -6,9 +6,11 @@ never a certificate that the statement is accurate or entailed by its source.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from auditable_ai.documents import SourceChunkRepository, SourceDocumentRepository
 from auditable_ai.errors import ProvenanceError
@@ -41,6 +43,16 @@ class EvidenceReference:
     locator_note: str | None = None
 
 
+def _normalized(name: str, value: Any, item_type: type) -> tuple[Any, ...]:
+    """Materialize a collection field once, before anything inspects its contents."""
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Iterable):
+        raise ValueError(f"{name} must be a collection of {item_type.__name__} values")
+    items = tuple(value)
+    if not all(isinstance(item, item_type) for item in items):
+        raise ValueError(f"{name} must contain only {item_type.__name__} values")
+    return items
+
+
 @dataclass(frozen=True)
 class Claim:
     claim_id: str
@@ -64,6 +76,13 @@ class Claim:
     missing_information: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        for name, item_type in (
+            ("supporting_evidence", EvidenceReference),
+            ("counterevidence", EvidenceReference),
+            ("contradicting_claim_ids", str),
+            ("missing_information", str),
+        ):
+            object.__setattr__(self, name, _normalized(name, getattr(self, name), item_type))
         validate_temporal_fields(
             ingested_at=self.ingested_at,
             recorded_at=self.recorded_at,
@@ -83,13 +102,6 @@ class Claim:
             or not 0 <= self.confidence <= 1
         ):
             raise ValueError("confidence must be null or a finite number in [0, 1]")
-        for name in (
-            "supporting_evidence",
-            "counterevidence",
-            "contradicting_claim_ids",
-            "missing_information",
-        ):
-            object.__setattr__(self, name, tuple(getattr(self, name)))
 
 
 class ClaimRepository:
@@ -147,6 +159,13 @@ class ClaimRepository:
     def add(self, claim: Claim) -> None:
         if claim.claim_id in self._by_id:
             raise ProvenanceError("claim identity already exists; use a new run id")
+        if not all(
+            isinstance(group, tuple) and all(isinstance(item, EvidenceReference) for item in group)
+            for group in (claim.supporting_evidence, claim.counterevidence)
+        ):
+            raise ProvenanceError("claim evidence must be a tuple of EvidenceReference values")
+        if claim.category is ClaimCategory.FACT and not claim.supporting_evidence:
+            raise ProvenanceError("a FACT cannot be stored without a supporting source reference")
         for reference in (*claim.supporting_evidence, *claim.counterevidence):
             self.validate_reference(
                 reference,
