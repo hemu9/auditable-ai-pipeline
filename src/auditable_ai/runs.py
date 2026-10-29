@@ -43,7 +43,9 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _validated(call: Callable[[], ExtractionResult]) -> tuple[str, ExtractionResult | None, Any]:
+def validated_outcome(
+    call: Callable[[], ExtractionResult],
+) -> tuple[str, ExtractionResult | None, Any]:
     """Run the extraction and classify every way it can end, so failures are never scored."""
     try:
         result = call()
@@ -81,7 +83,7 @@ def run_model_extraction(
     run_id = (
         run_id or f"{document.document_version_id}--{settings.model}--{started:%Y%m%dT%H%M%S%fZ}"
     )
-    status, result, diagnostics = _validated(
+    status, result, diagnostics = validated_outcome(
         lambda: EvidenceExtractor(claims=claims, extraction_fn=adapter).extract(
             source,
             source_as_of=started,
@@ -209,7 +211,7 @@ def replay_record(
     source, claims = register(document)
     adapter = RecordedResponseAdapter(document.text, raw_response)
     timestamps = record["timestamps"]
-    status, result, diagnostics = _validated(
+    status, result, diagnostics = validated_outcome(
         lambda: EvidenceExtractor(claims=claims, extraction_fn=adapter).extract(
             source,
             source_as_of=datetime.fromisoformat(timestamps["source_as_of"]),

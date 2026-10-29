@@ -99,7 +99,40 @@ There are eight evaluation documents. Counting documents as the unit, difference
 
 ### Results
 
-No system has been run on the evaluation split as of this version.
+#### Rule-based baseline: measured
+
+`auditable-ai evaluate --system baseline --split eval` runs a rule-based extractor (`baseline_response` in `src/auditable_ai/evaluation.py`) under the same conditions a model gets: the same documents and chunk IDs, the same output schema, validator and scorer. Every number that is not a year becomes a fact, and generic cue words set the claim type. Its rules were written before it was run on the evaluation split and have not been changed since.
+
+| Measure | Result |
+|---|---|
+| Runs scored | 8 of 8 |
+| Figure coverage | 30/33 (0.909): current 18/19, superseded 2/3, disputed 6/6, attributed 4/5 |
+| Claim support | 30/44 (0.682) |
+| Unsupported claims | 5/44 (0.114): wrong status 4, absent value 0, trap 1 |
+| Out-of-scope claims (dates, identifiers) | 9 |
+| Unresolved, left for human review | 1 |
+| Citation validity | provenance rejections 0/45 (0.000); semantic 34/34 (1.000) |
+| Disputed figures with counterevidence | 6/6 (1.000) |
+| Unknown coverage | 6/7 (0.857) |
+| Description check (keyword proxy) | 0/30 (0.000) |
+
+A test recomputes this table and fails if it drifts from the code. What it shows:
+
+- **Little headroom.** Every figure in this small dataset is written in digits, and most statuses are signaled by common cue words, so simple rules already cover 30 of 33 figures. A model can only be told apart from these rules on the cases the baseline gets wrong, and eight documents cannot resolve small differences.
+- **Where the rules fail.** They miss the correction where the old value comes first (410 revised to 385). They miss an attribution phrased as "a brochure states". They read "estimates" in a sentence about offline meters as an attribution. They report the embedded instruction's 500 as a fact.
+- **Weak claims.** None of the baseline's claims says what the figure measures (description check 0/30), and 9 of its 45 claims are dates or identifiers.
+
+#### Claude: not run
+
+No live model call has been made for this dataset. The adapter, recording, replay and scoring paths are implemented and tested offline with scripted provider responses. The following live measurements for `claude-opus-5-5` (effort `medium`, fallbacks off) on the evaluation split remain unmeasured:
+
+- figure coverage, claim support, unsupported claims, citation validity (both kinds), disputed counterevidence, unknown coverage and description check;
+- how often real responses are refused, truncated or malformed;
+- latency, token usage and cost per document;
+- variation between repeated runs;
+- replay of a real recorded response, which has so far been exercised only with scripted fixtures.
+
+To produce them, run `auditable-ai evaluate --system live --live --split eval --reps 3 --record-dir runs/` with the `claude` extra installed and `ANTHROPIC_API_KEY` set. This makes 24 billed API calls. Then score the recordings offline with `auditable-ai evaluate --system recorded --records runs/`. Scripted fixtures must not be substituted for these measurements; a report built from non-API responses says so in its caveats.
 
 ## What a fuller model evaluation would require
 
