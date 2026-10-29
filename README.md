@@ -135,7 +135,8 @@ Python 3.10 or newer is required. The core package uses only the standard librar
 | What | Status | Result |
 |---|---|---|
 | Validator regression scenarios (`check-fixtures`) | Measured | 8/8 pass. Scripted responses: software regression tests, not model accuracy |
-| Test suite | Measured in CI on Python 3.10, 3.12 and 3.14 | Offline; provider calls are mocked |
+| Test suite | Measured in CI on Python 3.10, 3.12 and 3.14 | Offline; provider calls are mocked. Includes property-based tests |
+| Mutation check (`tools/mutation_check.py`) | Enforced in CI | Each of 139 stated guarantees is disabled in turn, and the suite must catch every one ([how it works](docs/testing.md)) |
 | Rule-based baseline on the held-out split of `figure-extraction-v1` | Measured | 30/33 figures covered; 5 of 44 resolved claims unsupported, including the figure from an embedded instruction ([full table](docs/evaluation.md#results)) |
 | Claude (`claude-opus-5-5`) on the same split | **Not run** | No live model call has been made. The [workflow below](#real-model-workflow-claude) is implemented and tested offline |
 
@@ -166,7 +167,7 @@ auditable-ai replay runs/<run-id>.json     # re-validates the recorded response;
 - a cost estimate from published list prices;
 - the validated result (accepted claims, rejections, unknowns, counterevidence), or a failed run's class and diagnostics.
 
-Refusals, truncation, malformed output, validation and provenance errors, and provider errors are recorded as distinct outcomes, never as empty results. Nothing is sent without `--live`.
+Refusals, truncation, malformed output, validation and provenance errors, and provider errors are recorded as distinct outcomes, never as empty results. Whatever the provider returns, the record is written: a response field of an unexpected type reads as absent, and malformed usage makes the cost estimate unavailable. Nothing is sent without `--live`.
 
 Every record states where its response came from:
 
@@ -180,6 +181,16 @@ Defaults are `claude-opus-5-5` at effort `medium`, with no sampling parameters. 
 auditable-ai evaluate --system live --live --split eval --reps 3 --record-dir runs/   # 24 billed calls
 auditable-ai evaluate --system recorded --records runs/                                # offline scoring
 ```
+
+Replay and offline scoring trust only what they can re-derive:
+
+- A record file is refused, with the reason, unless it is standard JSON and every field replay or scoring reads is present with the expected type.
+- The embedded document and the response body must match their recorded hashes.
+- Replay runs under the recorded run ID. With the same validator version, it must reproduce the stored status and result exactly, apart from latency.
+- Scores, token counts, the served model and cost come from the replayed response, not from summary fields in the record.
+- A record that contradicts its own response is listed as an integrity failure and never scored.
+
+Latency and origin are recorded assertions that cannot be re-derived. Hashes catch accidental and inconsistent edits; they cannot catch someone who rewrites a record and recomputes its hashes.
 
 ## What `auditable-ai demo` shows
 
@@ -224,6 +235,15 @@ Any callable that takes `RawDocumentContent` and returns a JSON-compatible value
 
 See [architecture and contracts](docs/architecture.md) for exact semantics, and [failure analysis](docs/failure-analysis.md) for the out-of-order correction bug this design guards against.
 
+## How the guarantees are tested
+
+- **Example tests** cover each documented behavior and failure class.
+- **Property-based tests** ([`tests/test_properties.py`](tests/test_properties.py)) use Hypothesis to generate inputs: malformed adapter output, provider responses and retry sequences, hand-edited run records, and document version histories. Each generated input must be validated, recorded or refused as documented. A deterministic sweep also deletes, nulls and retypes every field of a run record.
+- **A mutation check** ([`tools/mutation_check.py`](tools/mutation_check.py)) disables each of 139 stated guarantees in turn, from clock bounds to cost-estimate guards. CI fails if the suite still passes for any of them.
+- **Strict type checking:** CI runs mypy in strict mode against the installed SDK.
+
+The property-based tests found bugs the example tests had missed. In the worst one, a malformed field in a provider response lost the record of a run that may already have been billed. All of them are fixed, and each has a regression test. [Testing notes](docs/testing.md) list them and explain how to run and extend each check.
+
 ## Engineering tradeoffs
 
 - **One temporal resolver:** in-memory and JSONL document backends use the same version-selection logic. One contract test suite runs every backend, including a reopened JSONL file, through all insertion orders, both query modes and scoped lineage queries.
@@ -244,6 +264,7 @@ See [architecture and contracts](docs/architecture.md) for exact semantics, and 
 - **Timestamps:** availability timestamps must be established upstream; uncertain-availability envelopes are not implemented. Version selection uses latest eligible timestamps, while supersession fields are validated annotations, not independent interval filters.
 - **Storage:** JSONL is a single-writer, append-only reference backend without fsync, crash atomicity or locking. Claims live in memory unless the caller stores the returned audit report or run record.
 - **Assertions, not attestations:** user-provided timestamps and labels are assertions, not attested metadata. Repositories refuse a recording time later than their clock but cannot detect a backdated one. Input and response hashes identify content; they are not signatures.
+- **Test evidence:** the mutation check shows the suite catches each listed mutation, not every possible bug. Property-based tests check stated invariants on generated inputs; in CI they use a fixed seed, so the same inputs run every time.
 
 ## Origin and attribution
 

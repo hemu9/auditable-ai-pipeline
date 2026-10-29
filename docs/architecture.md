@@ -51,6 +51,8 @@ The schema leaves source and chunk IDs as free strings, so an invented citation 
 
 The transport returns the exact HTTP response body and the request ID. Connection errors, 408, 409, 429 and 5xx responses are retried with jittered exponential backoff, respecting `retry-after` and capped at the configured number of attempts. Every attempt is recorded, and the reported latency is that of the final attempt only. Interpreting and parsing a response body use plain JSON, not SDK types, so a recording can be replayed without the SDK.
 
+Interpretation accepts any response body. It parses standard JSON only, so NaN, Infinity and nesting too deep to parse make the response malformed rather than raising. A field of an unexpected type, such as a served model that is not a string, reads as absent. Settings are checked when they are created, so a record never holds a setting it could not read back.
+
 `run_model_extraction` (`src/auditable_ai/runs.py`) produces one record per run:
 
 - the embedded document and its content hash;
@@ -71,18 +73,22 @@ Outcomes are classified as:
 | `completed` | The response was validated and a result was produced |
 | `refused` | `stop_reason` was `refusal` |
 | `truncated` | `stop_reason` was `max_tokens` |
-| `malformed_output` | No text block, or the text is not JSON |
+| `malformed_output` | The body is not a readable Messages API message, it has no text block, or its text is not standard JSON |
 | `validation_error` | The batch shape was invalid |
 | `provenance_error` | The top-level counterevidence did not resolve |
 | `provider_error` | No response was received |
 
-Records are written with exclusive creation and never overwritten.
+Records are written with exclusive creation and never overwritten. A record is serialized before its file is created, so one that cannot be written leaves no partial file. A malformed `usage` makes the cost estimate unavailable instead of failing the run, so a response that was received, and possibly billed, is always recorded.
 
 Each record's `origin` is `recorded_model_response` for a real API call or `scripted_fixture` for a test double; replay output is labeled `replayed_recording`.
 
 Request headers are never recorded, and anything shaped like an API key or bearer token is redacted from error messages. `extract` and `evaluate --system live` send nothing without `--live`, and they report missing SDKs or credentials before any request is made.
 
-`replay_record` re-validates a recording under the current validator without calling a model. It refuses a recording whose embedded document or response body no longer matches its hash, reproduces the diagnostics of failed runs, and reports which parts of the outcome (status, claims, rejections, unknowns) differ from the recorded ones. A run that received no response is reported as not replayable.
+`read_record` refuses a file that is not standard JSON, or that lacks any field replay, evaluation or the CLI reads, or holds one of the wrong type. The error names the file and the field. `replay_record` applies the same check, then re-validates the recording under the current validator without calling a model. It refuses a recording whose embedded document or response body no longer matches its hash. It runs under the recorded run ID, so with the same validator version it reproduces the stored status and result exactly, apart from latency; otherwise it lists the fields that differ. A run that received no response is reported as not replayable.
+
+`validator_version` names the rules that turn a response into an outcome: response interpretation, output parsing and batch validation. It changes whenever those rules would classify the same response differently.
+
+`evaluate --system recorded` scores only what it can re-derive. Results, token counts, the served model and cost come from the replayed response; cost uses the current price table. Latency and `origin` are taken from the record as written, because nothing in the response can confirm them. A record is listed as an integrity failure and never scored when its content fails a hash check, when it claims an outcome without a provider response, or when its stored outcome or served-model flag contradicts the replay under the same validator version. These checks catch accidental and inconsistent edits; a rewrite that recomputes the hashes is indistinguishable from a genuine record.
 
 `extract` opts into server-side refusal fallbacks (`fallbacks: "default"` under the `server-side-fallback-2026-07-01` beta), so the served model can differ from the requested one; the record keeps both. `evaluate` disables fallbacks and scores only responses served by the requested model, listing mismatches as failures.
 
@@ -90,6 +96,7 @@ Cost estimates multiply the per-attempt token usage the API reports by the list 
 
 - an unknown model;
 - a refusal;
+- usage that is not shaped like the API's, such as a count that is not a non-negative integer;
 - fast mode;
 - a non-default inference geography or service tier;
 - cache writes of unknown duration.
