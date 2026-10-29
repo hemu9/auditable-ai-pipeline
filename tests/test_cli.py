@@ -68,6 +68,25 @@ class ModelRunCommands(unittest.TestCase):
         self.assertIn("matches recorded outcome: yes", output.getvalue())
         self.assertEqual((report["origin"], report["model_calls"]), ("replayed_recording", 0))
 
+    def test_evaluate_and_replay_refuse_a_malformed_record_file_and_say_why(self):
+        record = run_model_extraction(
+            load_dataset().document("eval-call-center-v1"),
+            transport=ScriptedTransport(response(message_body(call_center_output()))),
+            clock=fixed_clock,
+        )
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "run.json")
+            path.write_text(json.dumps({**record, "run_id": 7}), encoding="utf-8")
+            for command in (
+                ["evaluate", "--system", "recorded", "--records", tmp],
+                ["replay", str(path)],
+            ):
+                errors = StringIO()
+                with self.subTest(command=command[0]):
+                    with redirect_stdout(StringIO()), redirect_stderr(errors):
+                        self.assertEqual(main(command), 2)
+                    self.assertIn(f"{path}: malformed run record: run_id", errors.getvalue())
+
     def test_numeric_options_are_checked_before_anything_is_sent(self):
         extract = ["extract", "--dataset-document", "eval-call-center-v1", "--live"]
         for arguments in (

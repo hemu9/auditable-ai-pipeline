@@ -1,6 +1,7 @@
 """Run records keep what is needed to audit or replay a model call; failures stay diagnosable."""
 
 import json
+import math
 import unittest
 from copy import deepcopy
 from datetime import datetime
@@ -151,6 +152,37 @@ class RunRecords(unittest.TestCase):
             )
         self.assertEqual(transport.requests, [])
 
+    def test_reading_refuses_a_malformed_record_and_says_why(self):
+        record = run_with(response(message_body(call_center_output())))
+        exchange, timestamps = record["exchange"], record["timestamps"]
+        cases = [
+            ("not a model_extraction_run record", [record]),
+            ("not a model_extraction_run record", {**record, "record_type": "report"}),
+            ("unsupported record_version 2", {**record, "record_version": 2}),
+            ("run_id must be a non-empty string", {**record, "run_id": ""}),
+            (
+                "served_model_matches_request is missing",
+                {k: v for k, v in record.items() if k != "served_model_matches_request"},
+            ),
+            (
+                "exchange.latency_ms must be a non-negative number or null",
+                {**record, "exchange": {**exchange, "latency_ms": "fast"}},
+            ),
+            (
+                "timestamps.extracted_at must be a timestamp with a UTC offset",
+                {**record, "timestamps": {**timestamps, "extracted_at": "2026-10-28T12:00:00"}},
+            ),
+            ("NaN is not valid JSON", {**record, "exchange": {**exchange, "latency_ms": math.nan}}),
+        ]
+        with TemporaryDirectory() as tmp:
+            for number, (reason, value) in enumerate(cases):
+                path = Path(tmp, f"record-{number}.json")
+                path.write_text(json.dumps(value), encoding="utf-8")
+                with self.subTest(reason=reason, case=number):
+                    with self.assertRaisesRegex(ValueError, reason) as caught:
+                        read_record(path)
+                    self.assertIn(str(path), str(caught.exception))
+
 
 class Replay(unittest.TestCase):
     def test_replay_reproduces_the_recorded_outcome_without_a_model_call(self):
@@ -198,3 +230,17 @@ class Replay(unittest.TestCase):
         replay = replay_record(record)
         self.assertEqual(replay["status"], "not_replayable")
         self.assertEqual(replay["recorded_diagnostics"]["status_code"], 400)
+
+    def test_replay_runs_under_the_recorded_run_id_and_reproduces_the_stored_result(self):
+        record = run_with(response(message_body(call_center_output())))
+        replay = replay_record(record)
+        self.assertEqual(replay["differences"], [])
+        for stored, replayed in zip(record["result"]["claims"], replay["result"]["claims"]):
+            self.assertEqual(replayed, stored)
+        relabeled = {**record, "status": "refused"}
+        self.assertEqual(replay_record(relabeled)["differences"], ["status"])
+
+    def test_replay_refuses_a_malformed_record(self):
+        record = run_with(response(message_body(call_center_output())))
+        with self.assertRaisesRegex(ValueError, "malformed run record: timestamps"):
+            replay_record({**record, "timestamps": None})

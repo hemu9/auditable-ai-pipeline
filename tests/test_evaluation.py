@@ -1,6 +1,7 @@
 """The scorer implements rubric v1 exactly, and its harness passes known-good and known-bad runs."""
 
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 from auditable_ai.dataset import load_dataset
@@ -40,6 +41,14 @@ def fact(document_id, text, claim_type, *chunks, counter=()):
 
 def result(*claims, unknowns=()):
     return {"claims": list(claims), "rejected_items": [], "unknowns": list(unknowns)}
+
+
+def recorded_run():
+    return run_model_extraction(
+        load_dataset().document("eval-call-center-v1"),
+        transport=ScriptedTransport(response(message_body(call_center_output()))),
+        clock=fixed_clock,
+    )
 
 
 class Harness(unittest.TestCase):
@@ -225,6 +234,84 @@ class RecordedRuns(unittest.TestCase):
         entries = record_entries([tampered], dataset)
         self.assertEqual(entries[0]["status"], "integrity_error")
         self.assertIn("hash", entries[0]["diagnostics"]["message"])
+
+    def test_a_completed_record_without_its_response_is_an_integrity_failure(self):
+        record = recorded_run()
+        for exchange in (None, {**record["exchange"], "raw_response": None}):
+            with self.subTest(exchange=exchange is None):
+                [entry] = record_entries([{**record, "exchange": exchange}], load_dataset())
+                self.assertEqual(entry["status"], "integrity_error")
+                self.assertIn("holds no provider response", entry["diagnostics"]["message"])
+
+    def test_a_stored_outcome_that_contradicts_its_response_is_an_integrity_failure(self):
+        record = recorded_run()
+        result = record["result"]
+        for altered in (
+            {**record, "status": "refused"},
+            {**record, "result": {**result, "claims": result["claims"][:1]}},
+            {**record, "result": {**result, "confidence": 0.9}},
+            {**record, "served_model_matches_request": False},
+        ):
+            with self.subTest():
+                [entry] = record_entries([altered], load_dataset())
+                self.assertEqual(entry["status"], "integrity_error")
+                self.assertIsNone(entry["result"])
+
+    def test_an_older_validators_outcome_may_differ_and_the_replay_is_scored(self):
+        record = recorded_run()
+        older = {**record, "validator_version": "1", "result": {**record["result"], "claims": []}}
+        [entry] = record_entries([older], load_dataset())
+        self.assertEqual(entry["status"], "completed")
+        self.assertFalse(entry["replay_matches_record"])
+        self.assertEqual(len(entry["result"]["claims"]), 2)
+
+    def test_tokens_cost_and_served_model_come_from_the_hash_checked_response(self):
+        record = recorded_run()
+        edited = deepcopy(record)
+        edited["response"]["usage"]["input_tokens"] = 1
+        edited["response"]["served_model"] = "claude-opus-4-8"
+        edited["cost"] = {"status": "estimated", "usd": 99.0}
+        [original], [altered] = (record_entries([run], load_dataset()) for run in (record, edited))
+        for key in ("usage", "cost", "served_model"):
+            self.assertEqual(altered[key], original[key])
+        self.assertEqual(
+            (original["usage"]["input_tokens"], original["cost"]["usd"]), (900, 0.0096)
+        )
+
+    def test_a_malformed_record_is_refused_rather_than_scored(self):
+        record = recorded_run()
+        malformed = {**record, "settings": {**record["settings"], "model": None}}
+        with self.assertRaisesRegex(ValueError, "malformed run record: settings.model"):
+            record_entries([malformed], load_dataset())
+
+    def test_token_totals_count_only_well_formed_usage(self):
+        dataset = load_dataset()
+        document = dataset.document("eval-call-center-v1")
+        bodies = [message_body(call_center_output())]
+        for count in ("[null]", "-5"):
+            bodies.append(bodies[0].replace('"input_tokens": 900', f'"input_tokens": {count}'))
+        records = [
+            run_model_extraction(
+                document,
+                transport=ScriptedTransport(response(body)),
+                clock=fixed_clock,
+                run_id=f"run-{number}",
+            )
+            for number, body in enumerate(bodies)
+        ]
+        report = build_report(
+            {"name": "claude", "origin": "replayed_recording"},
+            record_entries(records, dataset),
+            dataset,
+            "eval",
+        )
+        self.assertEqual(report["runs"]["scored"], 3)
+        performance = report["performance"]
+        self.assertEqual((performance["tokens"]["runs"], performance["tokens"]["input"]), (1, 900))
+        self.assertEqual(
+            (performance["cost"]["runs_estimated"], performance["cost"]["runs_unavailable"]),
+            (1, 2),
+        )
 
 
 class PublishedResults(unittest.TestCase):
