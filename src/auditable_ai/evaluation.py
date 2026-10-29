@@ -641,7 +641,7 @@ def format_report(report: Mapping[str, Any]) -> str:
     runs = report["runs"]
     performance = report["performance"]
     lines = [
-        f"{report['task_version']} | split={report['split']} ({runs['documents']} documents) | "
+        f"{report['dataset']} | split={report['split']} ({runs['documents']} documents) | "
         f"system={system['name']} ({system['origin']})",
         "Annotations: AI-written, unreviewed. Scores are provisional.",
         f"Runs: {runs['attempted']} attempted, {runs['scored']} scored, failed {runs['failed'] or 0}",
