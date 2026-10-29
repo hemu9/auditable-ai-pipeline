@@ -10,7 +10,7 @@ The README and [architecture notes](architecture.md) state guarantees. This page
   - **Model runs.** Any sequence of provider errors, ending in any response body, produces a run record. The record can be written and read back unchanged, and replay reproduces its outcome. A record written by this code is never flagged as an integrity failure, and an evaluation report can be built from it.
   - **Hand-edited records.** Generated edits, plus a deterministic sweep that deletes, nulls or retypes every field of a record, all end one of three ways: the record is refused as malformed, reported as a failure, or scored exactly like the original, with the same score, token counts, cost and served model. Edited hashed content is never scored, and the CLI never crashes on an edited file.
   - **Historical queries.** Random version histories are inserted in random order into the in-memory store, a JSONL file and the reopened file. For each source, every query returns the one eligible version with no later eligible sibling, raises an error on a tie, and never returns a version from after the cutoff.
-- **Mutation check** ([`tools/mutation_check.py`](../tools/mutation_check.py)). Each of 139 entries disables one stated guarantee by replacing exact source text, for example by turning a check into `if False:`. The check copies the repository once per entry, applies that one change and runs the whole suite. It fails if the suite still passes for any entry, because then no test protects that guarantee.
+- **Mutation check** ([`tools/mutation_check.py`](../tools/mutation_check.py)). Each of 143 entries disables one stated guarantee by replacing exact source text, for example by turning a check into `if False:`. The check copies the repository once per entry, applies that one change and runs the whole suite. It fails if the suite still passes for any entry, because then no test protects that guarantee.
 - **Strict type checking.** CI runs mypy in strict mode against the installed SDK.
 
 ## What these checks found
@@ -55,6 +55,6 @@ If a change moves or rewrites code that an entry targets, the check stops, names
 
 ## Limits
 
-- The mutation check measures the suite against 139 hand-written mutations, each chosen to disable a stated guarantee. It says nothing about bugs no one has listed.
+- The mutation check measures the suite against 143 hand-written mutations, each chosen to disable a stated guarantee. It says nothing about bugs no one has listed.
 - In CI, property tests run with a fixed seed, so the same inputs run every time. The `explore` profile searches further. Neither proves that no counterexample exists.
 - None of these checks measures model accuracy. See the [evaluation notes](evaluation.md).

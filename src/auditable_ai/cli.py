@@ -18,7 +18,14 @@ from auditable_ai.anthropic_adapter import (
     ClaudeSettings,
     redact,
 )
-from auditable_ai.dataset import DatasetDocument, load_dataset, load_document_file
+from auditable_ai.dataset import (
+    DATASETS,
+    DEFAULT_DATASET,
+    DatasetDocument,
+    bundled_document,
+    load_dataset,
+    load_document_file,
+)
 from auditable_ai.evaluation import (
     build_report,
     format_report,
@@ -183,7 +190,7 @@ def _extract(args: argparse.Namespace) -> int:
         return 2
     try:
         if args.dataset_document:
-            document = load_dataset().document(args.dataset_document)
+            document = bundled_document(args.dataset_document)
         else:
             document = load_document_file(args.document)
     except (KeyError, OSError, ValueError) as exc:
@@ -254,7 +261,7 @@ def _live_records(
 
 
 def _evaluate(args: argparse.Namespace) -> int:
-    dataset = load_dataset()
+    dataset = load_dataset(args.dataset)
     documents = dataset.split(args.split)
     if args.system == "baseline":
         system: dict[str, Any] = {"name": "rule_baseline", "origin": "rule_based"}
@@ -349,9 +356,15 @@ def main(argv: list[str] | None = None) -> int:
     replay.add_argument("record", type=Path)
     replay.add_argument("--output", type=Path, help="Write a new JSON replay report")
     evaluate = commands.add_parser(
-        "evaluate", help="Score a system on figure-extraction-v1 with the frozen rubric"
+        "evaluate", help="Score a system on a figure-extraction-v1 dataset with the frozen rubric"
     )
     evaluate.add_argument("--system", choices=("baseline", "recorded", "live"), required=True)
+    evaluate.add_argument(
+        "--dataset",
+        choices=tuple(DATASETS),
+        default=DEFAULT_DATASET,
+        help="bundled dataset to score against; results are comparable only within one",
+    )
     evaluate.add_argument("--split", choices=("dev", "eval", "all"), default="eval")
     evaluate.add_argument("--records", type=Path, metavar="DIR", help="run records to score")
     evaluate.add_argument(

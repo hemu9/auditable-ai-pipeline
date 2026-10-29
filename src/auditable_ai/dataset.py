@@ -25,7 +25,13 @@ from auditable_ai.documents import (
     SourceDocument,
 )
 
-DATASET_FILE = "datasets/figure_extraction_v1.json"
+# Bundled datasets for the figure-extraction-v1 task. They share its prompt, schema and
+# rubric; scores are comparable only within one dataset.
+DATASETS = {
+    "figure-extraction-v1": "datasets/figure_extraction_v1.json",
+    "figure-extraction-v1-hard": "datasets/figure_extraction_v1_hard.json",
+}
+DEFAULT_DATASET = "figure-extraction-v1"
 STATUSES = ("current", "superseded", "disputed", "attributed")
 _NUMBER = re.compile(r"(?<![\w.,])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
 
@@ -129,8 +135,10 @@ class Dataset:
         raise KeyError(f"no dataset document {document_version_id!r}")
 
 
-def load_dataset() -> Dataset:
-    data = json.loads(files("auditable_ai").joinpath(DATASET_FILE).read_text(encoding="utf-8"))
+def load_dataset(name: str = DEFAULT_DATASET) -> Dataset:
+    if name not in DATASETS:
+        raise ValueError(f"unknown dataset {name!r}; choose from {', '.join(DATASETS)}")
+    data = json.loads(files("auditable_ai").joinpath(DATASETS[name]).read_text(encoding="utf-8"))
     return Dataset(
         name=data["dataset"],
         task_version=data["task_version"],
@@ -140,6 +148,16 @@ def load_dataset() -> Dataset:
         documents=tuple(document_from_entry(entry) for entry in data["documents"]),
         sha256=canonical_hash(data),
     )
+
+
+def bundled_document(document_version_id: str) -> DatasetDocument:
+    """A document from any bundled dataset; version IDs are unique across them."""
+    for name in DATASETS:
+        try:
+            return load_dataset(name).document(document_version_id)
+        except KeyError:
+            continue
+    raise KeyError(f"no bundled dataset document {document_version_id!r}")
 
 
 def load_document_file(path: Path) -> DatasetDocument:

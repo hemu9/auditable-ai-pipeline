@@ -203,6 +203,16 @@ class EvaluationCommand(unittest.TestCase):
         self.assertIn("AI-written, unreviewed", output.getvalue())
         self.assertEqual((report["split"], report["runs"]["scored"]), ("eval", 8))
 
+    def test_evaluation_loads_the_dataset_it_was_asked_for(self):
+        with (
+            TemporaryDirectory() as tmp,
+            redirect_stderr(StringIO()),
+            mock.patch("auditable_ai.cli.load_dataset", wraps=load_dataset) as loader,
+        ):
+            arguments = ["evaluate", "--system", "recorded", "--records", tmp]
+            self.assertEqual(main(arguments + ["--dataset", "figure-extraction-v1-hard"]), 2)
+        loader.assert_called_once_with("figure-extraction-v1-hard")
+
     def test_live_evaluation_refuses_without_live_and_keeps_fallbacks_off(self):
         errors = StringIO()
         with redirect_stderr(errors), mock.patch("auditable_ai.cli.AnthropicTransport") as sdk:

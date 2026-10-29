@@ -1,13 +1,18 @@
 """The evaluation dataset and task definition are checked before any scoring relies on them."""
 
 import json
+import re
 import unittest
+from collections import Counter
 from dataclasses import replace
+from importlib.resources import files
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from auditable_ai.dataset import (
+    DATASETS,
     Trap,
+    bundled_document,
     check_dataset,
     document_to_entry,
     load_dataset,
@@ -17,11 +22,14 @@ from auditable_ai.dataset import (
 )
 from auditable_ai.figure_task import (
     CLAIM_TYPE_STATUS,
+    TASK_VERSION,
     prompt_sha256,
     render_document,
     response_schema,
     template_sha256,
 )
+
+DOCS = Path(__file__).resolve().parent.parent / "docs" / "evaluation.md"
 
 
 class DatasetIntegrity(unittest.TestCase):
@@ -108,6 +116,72 @@ class DatasetIntegrity(unittest.TestCase):
             loaded = load_document_file(path)
         self.assertEqual(loaded.text, document.text)
         self.assertEqual((loaded.figures, loaded.unknowns), ((), ()))
+
+
+class BundledDatasets(unittest.TestCase):
+    def test_every_bundled_dataset_passes_the_integrity_checks(self):
+        for name in DATASETS:
+            with self.subTest(dataset=name):
+                self.assertEqual(check_dataset(load_dataset(name)), [])
+
+    def test_each_dataset_names_itself_and_the_task_it_belongs_to(self):
+        for name in DATASETS:
+            dataset = load_dataset(name)
+            self.assertEqual((dataset.name, dataset.task_version), (name, TASK_VERSION))
+
+    def test_document_ids_are_unique_across_datasets(self):
+        ids = [d.document_version_id for name in DATASETS for d in load_dataset(name).documents]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_every_dataset_says_its_annotations_are_ai_written_and_unreviewed(self):
+        for name in DATASETS:
+            provenance = load_dataset(name).provenance
+            with self.subTest(dataset=name):
+                self.assertEqual(
+                    (provenance["review_status"], provenance["reviewers"]), ("unreviewed", [])
+                )
+                self.assertIn("AI-generated", provenance["annotations"])
+                self.assertIn("claude-opus-5-5", provenance["conflict_of_interest"])
+
+    def test_an_unknown_dataset_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "unknown dataset"):
+            load_dataset("figure-extraction-v9")
+
+    def test_a_bundled_document_is_found_in_whichever_dataset_holds_it(self):
+        self.assertEqual(bundled_document("hard-eval-ferry-service-v1").split, "eval")
+        self.assertEqual(bundled_document("eval-call-center-v1").source_id, "utility-call-center")
+        with self.assertRaises(KeyError):
+            bundled_document("eval-unknown-v1")
+
+
+class HardDataset(unittest.TestCase):
+    NAME = "figure-extraction-v1-hard"
+
+    def setUp(self):
+        self.dataset = load_dataset(self.NAME)
+        self.raw = json.loads(files("auditable_ai").joinpath(DATASETS[self.NAME]).read_text())
+
+    def test_development_and_evaluation_documents_are_disjoint(self):
+        dev = {document.document_version_id for document in self.dataset.split("dev")}
+        held_out = {document.document_version_id for document in self.dataset.split("eval")}
+        self.assertEqual((len(dev), len(held_out)), (4, 16))
+        self.assertFalse(dev & held_out)
+
+    def test_every_phenomenon_tag_is_defined_and_used(self):
+        used = {tag for document in self.raw["documents"] for tag in document["phenomena"]}
+        self.assertEqual(used, set(self.raw["phenomena"]))
+
+    def test_the_documented_phenomenon_counts_are_current(self):
+        counts = Counter(tag for d in self.dataset.split("eval") for tag in d.phenomena)
+        rows = re.findall(
+            r"^\| `(\w+)` \| [^|]+ \| (\d+) \|$", DOCS.read_text(encoding="utf-8"), re.M
+        )
+        self.assertEqual({tag: int(count) for tag, count in rows}, dict(counts))
+
+    def test_the_construction_note_discloses_the_adversarial_design(self):
+        construction = self.dataset.provenance["construction"]
+        self.assertIn("adversarial to cue-word rules by design", construction)
+        self.assertIn("not run on these documents until the dataset was frozen", construction)
 
 
 class TaskDefinition(unittest.TestCase):

@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = Path("src", "auditable_ai")
-COPIED = ("src", "tests", "docs", "examples", "README.md")
+COPIED = ("src", "tests", "docs", "examples", "tools", "README.md")
 SUITE_TIMEOUT_S = 600
 
 
@@ -940,6 +940,13 @@ MUTATIONS = (
         "    if False:",
         "token totals exclude negative counts",
     ),
+    Mutation(
+        "V21",
+        "evaluation.py",
+        "        f\"{report['dataset']} | split={report['split']} ({runs['documents']} documents) | \"",
+        "        f\"{report['task_version']} | split={report['split']} ({runs['documents']} documents) | \"",
+        "a report names the dataset it scored",
+    ),
     # Dataset
     Mutation(
         "Q1",
@@ -954,6 +961,20 @@ MUTATIONS = (
         "            if chunk_id in texts and figure.value not in numbers_in(texts[chunk_id]):",
         "            if False:",
         "a gold value appears in the sentence it cites",
+    ),
+    Mutation(
+        "Q3",
+        "dataset.py",
+        "    if name not in DATASETS:\n        raise ValueError(",
+        "    if False:\n        raise ValueError(",
+        "an unknown dataset name is refused",
+    ),
+    Mutation(
+        "Q4",
+        "dataset.py",
+        "    for name in DATASETS:\n        try:\n            return load_dataset(name).document(document_version_id)",
+        "    for name in (DEFAULT_DATASET,):\n        try:\n            return load_dataset(name).document(document_version_id)",
+        "a bundled document is found in whichever dataset holds it",
     ),
     # Command line
     Mutation(
@@ -1025,6 +1046,13 @@ MUTATIONS = (
         '    text = json.dumps(report, indent=2, allow_nan=False) + "\\n"\n    with path.open("x", encoding="utf-8") as stream:\n        stream.write(text)',
         '    with path.open("x", encoding="utf-8") as stream:\n        stream.write(json.dumps(report, indent=2, allow_nan=False) + "\\n")',
         "a report that cannot be serialized leaves no partial file",
+    ),
+    Mutation(
+        "L11",
+        "cli.py",
+        "    dataset = load_dataset(args.dataset)",
+        "    dataset = load_dataset()",
+        "evaluate scores the dataset it was asked for",
     ),
 )
 

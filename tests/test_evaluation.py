@@ -1,12 +1,14 @@
 """The scorer implements rubric v1 exactly, and its harness passes known-good and known-bad runs."""
 
+import itertools
 import unittest
 from copy import deepcopy
 from pathlib import Path
 
-from auditable_ai.dataset import load_dataset
+from auditable_ai.dataset import DATASETS, load_dataset
 from auditable_ai.evaluation import (
     build_report,
+    format_report,
     label_claim,
     markdown_summary,
     offline_entries,
@@ -53,9 +55,9 @@ def recorded_run():
 
 class Harness(unittest.TestCase):
     def test_gold_answers_score_fully_and_an_empty_output_scores_nothing(self):
-        dataset = load_dataset()
-        for split in ("dev", "eval"):
-            with self.subTest(split=split):
+        for name, split in itertools.product(DATASETS, ("dev", "eval")):
+            dataset = load_dataset(name)
+            with self.subTest(dataset=name, split=split):
                 documents = dataset.split(split)
                 oracle = build_report(
                     {"name": "oracle", "origin": "harness_check"},
@@ -74,6 +76,22 @@ class Harness(unittest.TestCase):
                 self.assertEqual(oracle["description_check"]["rate"], 1.0)
                 self.assertEqual(empty["figure_coverage"]["numerator"], 0)
                 self.assertEqual(empty["claim_support"]["denominator"], 0)
+
+    def test_a_report_names_the_dataset_it_scored(self):
+        dataset = load_dataset("figure-extraction-v1-hard")
+        documents = dataset.split("eval")
+        report = build_report(
+            {"name": "null", "origin": "harness_check"},
+            offline_entries("null", documents),
+            dataset,
+            "eval",
+        )
+        self.assertEqual(report["dataset"], "figure-extraction-v1-hard")
+        self.assertTrue(
+            format_report(report).startswith(
+                "figure-extraction-v1-hard | split=eval (16 documents)"
+            )
+        )
 
 
 class LabelRules(unittest.TestCase):

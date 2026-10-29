@@ -136,7 +136,7 @@ Python 3.10 or newer is required. The core package uses only the standard librar
 |---|---|---|
 | Validator regression scenarios (`check-fixtures`) | Measured | 8/8 pass. Scripted responses: software regression tests, not model accuracy |
 | Test suite | Measured in CI on Python 3.10, 3.12 and 3.14 | Offline; provider calls are mocked. Includes property-based tests |
-| Mutation check (`tools/mutation_check.py`) | Enforced in CI | Each of 139 stated guarantees is disabled in turn, and the suite must catch every one ([how it works](docs/testing.md)) |
+| Mutation check (`tools/mutation_check.py`) | Enforced in CI | Each of 143 stated guarantees is disabled in turn, and the suite must catch every one ([how it works](docs/testing.md)) |
 | Rule-based baseline on the held-out split of `figure-extraction-v1` | Measured | 30/33 figures covered; 5 of 44 resolved claims unsupported, including the figure from an embedded instruction ([full table](docs/evaluation.md#results)) |
 | Claude (`claude-opus-5-5`) on the same split | **Not run** | No live model call has been made. The [workflow below](#real-model-workflow-claude) is implemented and tested offline |
 
@@ -239,7 +239,7 @@ See [architecture and contracts](docs/architecture.md) for exact semantics, and 
 
 - **Example tests** cover each documented behavior and failure class.
 - **Property-based tests** ([`tests/test_properties.py`](tests/test_properties.py)) use Hypothesis to generate inputs: malformed adapter output, provider responses and retry sequences, hand-edited run records, and document version histories. Each generated input must be validated, recorded or refused as documented. A deterministic sweep also deletes, nulls and retypes every field of a run record.
-- **A mutation check** ([`tools/mutation_check.py`](tools/mutation_check.py)) disables each of 139 stated guarantees in turn, from clock bounds to cost-estimate guards. CI fails if the suite still passes for any of them.
+- **A mutation check** ([`tools/mutation_check.py`](tools/mutation_check.py)) disables each of 143 stated guarantees in turn, from clock bounds to cost-estimate guards. CI fails if the suite still passes for any of them.
 - **Strict type checking:** CI runs mypy in strict mode against the installed SDK.
 
 The property-based tests found bugs the example tests had missed. In the worst one, a malformed field in a provider response lost the record of a run that may already have been billed. All of them are fixed, and each has a regression test. [Testing notes](docs/testing.md) list them and explain how to run and extend each check.
