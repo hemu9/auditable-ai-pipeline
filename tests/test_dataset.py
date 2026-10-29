@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from auditable_ai.dataset import (
+    Trap,
     check_dataset,
     document_to_entry,
     load_dataset,
@@ -35,6 +36,31 @@ class DatasetIntegrity(unittest.TestCase):
         altered = replace(document, sentences=(*document.sentences, "Staff took 12 breaks."))
         problems = check_dataset(replace(self.dataset, documents=(altered,)))
         self.assertEqual(problems, ["eval-call-center-v1: number 12 is not annotated"])
+
+    def test_the_checker_reports_broken_annotations(self):
+        document = self.dataset.document("eval-call-center-v1")
+        first, second, third, fourth = document.figures
+        broken = replace(
+            document,
+            figures=(
+                replace(first, chunks=(document.chunk_id(3),)),
+                replace(second, status="estimated"),
+                replace(third, counter_chunks=()),
+                replace(fourth, chunks=("eval-call-center-v1:s9",)),
+            ),
+            unknowns=(replace(document.unknowns[0], match_any=(("weather",),)),),
+            traps=(Trap(value=77.0, chunks=(document.chunk_id(1),), reason="seeded error"),),
+        )
+        problems = "\n".join(check_dataset(replace(self.dataset, documents=(broken,))))
+        for expected in (
+            "F1: value is not stated in eval-call-center-v1:s3",
+            "F2: unknown status 'estimated'",
+            "F3: a disputed figure needs counter_chunks",
+            "F4: unknown chunk eval-call-center-v1:s9",
+            "U1: no keyword group appears in its own chunks",
+            "trap 77 is not in its chunks",
+        ):
+            self.assertIn(expected, problems)
 
     def test_development_and_evaluation_documents_are_disjoint(self):
         dev = {document.document_version_id for document in self.dataset.split("dev")}

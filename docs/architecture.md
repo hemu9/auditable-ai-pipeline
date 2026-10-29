@@ -35,12 +35,67 @@ Claims retain the input source's availability and the extraction's own recording
 
 ## Audit and reproducibility
 
-Each completed result includes raw response JSON, canonical response hash, source-content hash, exact input version, source cutoff, recording time, model/prompt labels, validator version, accepted claims, rejected items, unknowns and opposing evidence. The adapter's latency is measured locally; the demo's latency is for a scripted callable, not inference. Sampling settings, provider responses and actual prompt text are not captured automatically, so model-call reproducibility requires the integration to retain those separately.
+Each completed result includes raw response JSON, canonical response hash, source-content hash, exact input version, source cutoff, recording time, model/prompt labels, validator version, accepted claims, rejected items, unknowns and opposing evidence. The adapter's latency is measured locally; the demo's latency is for a scripted callable, not inference. A custom adapter must retain provider responses, prompts and settings itself; the Claude workflow below does this.
 
-The CLI writes reports with exclusive file creation. It refuses a path that already exists. This prevents accidental overwrite through that command; it does not provide tamper-proof storage, authentication or encryption. Malformed batches and adapter exceptions propagate to the caller; there is no failed-run persistence layer in this version.
+The CLI writes reports with exclusive file creation. It refuses a path that already exists. This prevents accidental overwrite through that command; it does not provide tamper-proof storage, authentication or encryption. In library use, malformed batches and adapter exceptions propagate to the caller. The model-run workflow below turns every outcome, including failures, into a run record.
+
+## Claude adapter, run records and replay
+
+`ClaudeExtractionAdapter` (`src/auditable_ai/anthropic_adapter.py`) is an extraction callable like any other: `EvidenceExtractor` invokes it, and its output passes through the same validator. It sends one Messages API request per document through the official `anthropic` SDK, an optional dependency installed with the `claude` extra. The request:
+
+- asks for structured output (`output_config.format`) using the schema in `figure_task.py`;
+- sets `effort` explicitly (`medium` by default) and sends no sampling parameters;
+- leaves thinking at the model's adaptive default.
+
+The schema leaves source and chunk IDs as free strings, so an invented citation reaches the provenance checks instead of being made impossible by decoding.
+
+The transport returns the exact HTTP response body and the request ID. Connection errors, 408, 409, 429 and 5xx responses are retried with jittered exponential backoff, respecting `retry-after` and capped at the configured number of attempts. Every attempt is recorded, and the reported latency is that of the final attempt only. Interpreting and parsing a response body use plain JSON, not SDK types, so a recording can be replayed without the SDK.
+
+`run_model_extraction` (`src/auditable_ai/runs.py`) produces one record per run:
+
+- the embedded document and its content hash;
+- the task version, plus template and prompt fingerprints;
+- the settings and SDK version;
+- timestamps;
+- the exchange: the full request, every attempt, the request ID, the raw response body and its SHA-256;
+- the interpreted response: served model, stop reason, stop details, usage and fallback switches;
+- whether the served model matches the request;
+- a cost estimate;
+- the validator version;
+- the validated result, or diagnostics.
+
+Outcomes are classified as:
+
+| Outcome | Meaning |
+|---|---|
+| `completed` | The response was validated and a result was produced |
+| `refused` | `stop_reason` was `refusal` |
+| `truncated` | `stop_reason` was `max_tokens` |
+| `malformed_output` | No text block, or the text is not JSON |
+| `validation_error` | The batch shape was invalid |
+| `provenance_error` | The top-level counterevidence did not resolve |
+| `provider_error` | No response was received |
+
+Records are written with exclusive creation and never overwritten.
+
+Each record's `origin` is `recorded_model_response` for a real API call or `scripted_fixture` for a test double; replay output is labeled `replayed_recording`.
+
+Request headers are never recorded, and anything shaped like an API key or bearer token is redacted from error messages. `extract` and `evaluate --system live` send nothing without `--live`, and they report missing SDKs or credentials before any request is made.
+
+`replay_record` re-validates a recording under the current validator without calling a model. It refuses a recording whose embedded document or response body no longer matches its hash, reproduces the diagnostics of failed runs, and reports which parts of the outcome (status, claims, rejections, unknowns) differ from the recorded ones. A run that received no response is reported as not replayable.
+
+`extract` opts into server-side refusal fallbacks (`fallbacks: "default"` under the `server-side-fallback-2026-07-01` beta), so the served model can differ from the requested one; the record keeps both. `evaluate` disables fallbacks and scores only responses served by the requested model, listing mismatches as failures.
+
+Cost estimates multiply the per-attempt token usage the API reports by the list prices in `pricing.py`, which records its source URL and retrieval date. The estimate is reported as unavailable, not guessed, in these cases:
+
+- an unknown model;
+- a refusal;
+- fast mode;
+- a non-default inference geography or service tier;
+- cache writes of unknown duration.
 
 ## Storage and scope
 
 The in-memory and JSONL source stores share the same resolver. JSONL reconstructs validated records on read and preserves earlier row contents on additions, but reads and rewrites the entire file. It is appropriate for this small single-process demo, not concurrent or large production workloads. Claims themselves use an in-memory repository.
 
-All dependencies between modules stay inside the exported package and Python's standard library. No private system imports, data providers, model SDKs or domain decision components are needed. Exact public-availability timestamps are upstream assertions; an uncertain date must not be silently represented as precise. Until uncertainty envelopes exist, only run strict historical queries on sources with established exact timestamps.
+The core package depends only on Python's standard library. The optional `claude` extra adds the official Anthropic SDK, which only the live transport imports. No private system imports, data providers or domain decision components are needed. Exact public-availability timestamps are upstream assertions; an uncertain date must not be silently represented as precise. Until uncertainty envelopes exist, only run strict historical queries on sources with established exact timestamps.

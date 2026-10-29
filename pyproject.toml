@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auditable-ai-pipeline"
-version = "0.1.0"
-description = "Source-attributed AI extraction with deterministic validation, immutable document versions, and historical replay."
+version = "0.2.0"
+description = "Source-attributed AI extraction with deterministic validation, recorded model runs with offline replay, and historical queries."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
