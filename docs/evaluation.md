@@ -203,7 +203,36 @@ There are sixteen evaluation documents. Counting documents as the unit, differen
 
 ### Results
 
-#### Rule-based baseline: not yet run
+#### Rule-based baseline on the hard dataset: measured
+
+`auditable-ai evaluate --system baseline --dataset figure-extraction-v1-hard --split eval` runs the same rule-based extractor, unchanged, under the same conditions as on figure-extraction-v1. It was run once, after the dataset was frozen.
+
+| Measure | Result |
+|---|---|
+| Runs scored | 16 of 16 |
+| Figure coverage | 39/84 (0.464): current 34/56, superseded 1/7, disputed 0/8, attributed 4/13 |
+| Claim support | 39/114 (0.342) |
+| Unsupported claims | 44/114 (0.386): wrong status 42, absent value 0, trap 2 |
+| Out-of-scope claims (dates, identifiers) | 31 |
+| Unresolved, left for human review | 1 |
+| Citation validity | provenance rejections 0/115 (0.000); semantic 81/81 (1.000) |
+| Disputed figures with counterevidence | 0/0 (n/a) |
+| Unknown coverage | 6/16 (0.375) |
+| Description check (keyword proxy) | 0/39 (0.000) |
+
+A test recomputes this table and fails if it drifts from the code. What it shows:
+
+- **Headroom.** Coverage falls from 30 of 33 figures on figure-extraction-v1 to 39 of 84 here, and unsupported claims rise from 5 of 44 to 44 of 114. A model can now be told apart from these rules on most figures; whether one is remains unmeasured.
+- **Where the rules fail, by phenomenon:**
+  - all 8 disputed figures, whose competing values sit in different sentences or share one without a contrast word, read as current;
+  - the three corrections that state the old value first invert both values, and replaced values stated in an earlier sentence read as current, or as attributed after "said";
+  - "but" and "while" between unrelated figures turn 8 current figures into disputes;
+  - attributions with contends, maintains, insists, puts, reckons or states, and projections with anticipate or likely, read as current (8 figures) or disputed (1);
+  - cue words in other senses ("as forecast", "as expected", "predicted", "projected", "damage claims") turn 6 current figures into attributions. In 2 sentences, an attribution in one clause mislabels the report's own figure in the other;
+  - the year filter drops all three counts between 1900 and 2100;
+  - both embedded instructions are reported as facts.
+- **Noise and gaps.** 31 of the baseline's 115 claims are identifiers, dates or times. It finds 6 of the 16 unknowns, all stated with its cue words, and none of its claims says what its figure measures.
+- **What this does not show.** The dataset was written against these rules, so these numbers locate their blind spots. They do not estimate how often such sentences occur in real reports.
 
 #### Claude: not run
 

@@ -125,6 +125,7 @@ More commands, still offline:
 auditable-ai demo                          # both historical query modes, scripted validator cases
 auditable-ai check-fixtures                # the eight validator regression scenarios
 auditable-ai evaluate --system baseline    # rule-based baseline on the held-out evaluation split
+auditable-ai evaluate --system baseline --dataset figure-extraction-v1-hard   # the same, on harder documents
 python -m unittest discover -s tests -t . -v
 ```
 
@@ -138,14 +139,15 @@ Python 3.10 or newer is required. The core package uses only the standard librar
 | Test suite | Measured in CI on Python 3.10, 3.12 and 3.14 | Offline; provider calls are mocked. Includes property-based tests |
 | Mutation check (`tools/mutation_check.py`) | Enforced in CI | Each of 143 stated guarantees is disabled in turn, and the suite must catch every one ([how it works](docs/testing.md)) |
 | Rule-based baseline on the held-out split of `figure-extraction-v1` | Measured | 30/33 figures covered; 5 of 44 resolved claims unsupported, including the figure from an embedded instruction ([full table](docs/evaluation.md#results)) |
-| Claude (`claude-opus-5-5`) on the same split | **Not run** | No live model call has been made. The [workflow below](#real-model-workflow-claude) is implemented and tested offline |
+| Rule-based baseline on the held-out split of `figure-extraction-v1-hard` | Measured | 39/84 figures covered, 0 of 8 disputed figures among them; 44 of 114 resolved claims unsupported ([full table](docs/evaluation.md#figure-extraction-v1-hard)) |
+| Claude (`claude-opus-5-5`) on either held-out split | **Not run** | No live model call has been made. The [workflow below](#real-model-workflow-claude) is implemented and tested offline |
 
 The evaluation is small and deliberately cautious:
 
-- Its twelve synthetic documents and gold annotations were written by an AI model (Claude Opus 5.5) and have not been reviewed by a person.
+- Its synthetic documents and gold annotations were written by an AI model (Claude Opus 5.5) and have not been reviewed by a person: twelve documents in the original dataset, twenty in the harder one.
 - The default evaluated model is that same model.
-- With eight held-out documents, only large differences are meaningful.
-- The baseline result shows the dataset has little headroom over simple rules.
+- With eight and sixteen held-out documents, only large differences are meaningful.
+- On the original dataset, simple rules leave little headroom. The harder dataset reuses the same task with documents that need reading rather than cue words. It was written against those rules, so it shows where they fail, not how often.
 
 [Evaluation notes](docs/evaluation.md) give the task, rubric, denominators and limits.
 
@@ -181,6 +183,8 @@ Defaults are `claude-opus-5-5` at effort `medium`, with no sampling parameters. 
 auditable-ai evaluate --system live --live --split eval --reps 3 --record-dir runs/   # 24 billed calls
 auditable-ai evaluate --system recorded --records runs/                                # offline scoring
 ```
+
+Add `--dataset figure-extraction-v1-hard` to both commands for the harder documents; a live run there makes 48 billed calls.
 
 Replay and offline scoring trust only what they can re-derive:
 

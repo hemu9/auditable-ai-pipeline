@@ -334,13 +334,15 @@ class RecordedRuns(unittest.TestCase):
 
 class PublishedResults(unittest.TestCase):
     def test_the_baseline_results_in_the_documentation_are_current(self):
-        dataset = load_dataset()
-        report = build_report(
-            {"name": "rule_baseline", "origin": "rule_based"},
-            offline_entries("rule_baseline", dataset.split("eval")),
-            dataset,
-            "eval",
-        )
-        self.assertIn(markdown_summary(report), DOCS.read_text(encoding="utf-8"))
-        self.assertEqual(report["annotation_provenance"]["review_status"], "unreviewed")
-        self.assertTrue(any("not a model" in note for note in report["caveats"]))
+        for name in DATASETS:
+            dataset = load_dataset(name)
+            report = build_report(
+                {"name": "rule_baseline", "origin": "rule_based"},
+                offline_entries("rule_baseline", dataset.split("eval")),
+                dataset,
+                "eval",
+            )
+            with self.subTest(dataset=name):
+                self.assertIn(markdown_summary(report), DOCS.read_text(encoding="utf-8"))
+                self.assertEqual(report["annotation_provenance"]["review_status"], "unreviewed")
+                self.assertTrue(any("not a model" in note for note in report["caveats"]))
