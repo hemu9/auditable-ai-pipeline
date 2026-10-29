@@ -71,3 +71,23 @@ class CostEstimates(unittest.TestCase):
                 cost = estimate_cost(usage, model, stop_reason=stop_reason)
                 self.assertEqual((cost["status"], cost["usd"]), ("unavailable", None))
                 self.assertIn(phrase, cost["reason"])
+
+    def test_malformed_usage_makes_the_estimate_unavailable_instead_of_raising(self):
+        cases = {
+            "a list as a count": {"input_tokens": [None], "output_tokens": 0},
+            "a negative count": {"input_tokens": -1},
+            "a boolean count": {"output_tokens": True},
+            "iterations that are not a list": {"input_tokens": 1, "iterations": {"model": "x"}},
+            "an iteration that is not an object": {"input_tokens": 1, "iterations": [7]},
+            "an unhashable model": {"iterations": [{"model": ["claude-opus-5-5"]}]},
+            "cache durations that are not an object": {
+                "cache_creation_input_tokens": 5,
+                "cache_creation": "5m",
+            },
+            "a count too large to convert": {"input_tokens": 10**400},
+            "a total too large to price": {"input_tokens": 10**308},
+        }
+        for name, usage in cases.items():
+            with self.subTest(name):
+                cost = estimate_cost(usage, "claude-opus-5-5", stop_reason="end_turn")
+                self.assertEqual((cost["status"], cost["usd"]), ("unavailable", None))

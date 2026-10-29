@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -35,11 +36,27 @@ ORIGIN_LABELS = {
 }
 
 
-def write_new_report(path: Path, report: dict) -> None:
-    """Never replace a prior audit artifact: an existing path is an error."""
+def write_new_report(path: Path, report: dict[str, Any]) -> None:
+    """Never replace a prior audit artifact: an existing path is an error.
+
+    The report is serialized first, so a failure leaves no partial file."""
+    text = json.dumps(report, indent=2, allow_nan=False) + "\n"
     with path.open("x", encoding="utf-8") as stream:
-        json.dump(report, stream, indent=2, allow_nan=False)
-        stream.write("\n")
+        stream.write(text)
+
+
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text} is not a positive integer")
+    return value
+
+
+def _positive_seconds(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError(f"{text} is not a positive number of seconds")
+    return value
 
 
 def _demo(data: dict) -> dict:
@@ -289,15 +306,17 @@ def _write_output(path: Path | None, report: dict, exit_code: int) -> int:
 def _add_model_options(parser: argparse.ArgumentParser, *, fallbacks: str) -> None:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--effort", choices=EFFORT_LEVELS, default=DEFAULT_EFFORT)
-    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument("--max-tokens", type=_positive_int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument(
         "--fallbacks",
         choices=("default", "none"),
         default=fallbacks,
         help="server-side refusal fallback; 'none' keeps every response on the requested model",
     )
-    parser.add_argument("--max-attempts", type=int, default=3)
-    parser.add_argument("--timeout", type=float, default=120.0, help="seconds per request")
+    parser.add_argument("--max-attempts", type=_positive_int, default=3)
+    parser.add_argument(
+        "--timeout", type=_positive_seconds, default=120.0, help="seconds per request"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -336,7 +355,9 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument(
         "--live", action="store_true", help="confirm that --system live may call the API and cost"
     )
-    evaluate.add_argument("--reps", type=int, default=1, help="repetitions per document (live)")
+    evaluate.add_argument(
+        "--reps", type=_positive_int, default=1, help="repetitions per document (live)"
+    )
     evaluate.add_argument("--record-dir", type=Path, default=Path("runs"))
     evaluate.add_argument("--output", type=Path, help="Write a new JSON evaluation report")
     _add_model_options(evaluate, fallbacks="none")

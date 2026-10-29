@@ -24,7 +24,7 @@ from auditable_ai.errors import (
 )
 from auditable_ai.temporal import require_not_in_future, require_timezone_aware
 
-VALIDATOR_VERSION = "2"
+VALIDATOR_VERSION = "3"
 
 TOP_FIELDS = frozenset(
     {"facts", "inferences", "unknowns", "contradicting_evidence", "source_ids", "confidence"}

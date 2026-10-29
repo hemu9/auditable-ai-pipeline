@@ -10,7 +10,7 @@ EvidenceExtractor validates it exactly as it validates any other adapter."""
 from __future__ import annotations
 
 import hashlib
-import json
+import math
 import random
 import re
 import time
@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from auditable_ai._immutable import strict_loads
 from auditable_ai.dataset import DatasetDocument
 from auditable_ai.documents import RawDocumentContent
 from auditable_ai.figure_task import SYSTEM_PROMPT, render_document, response_schema
@@ -90,12 +91,32 @@ class RawResponse:
 
 @dataclass(frozen=True)
 class ClaudeSettings:
+    """Settings are checked when created, so every run record can be read back."""
+
     model: str = DEFAULT_MODEL
     effort: str = DEFAULT_EFFORT
     max_tokens: int = DEFAULT_MAX_TOKENS
     fallbacks: str | None = "default"
     max_attempts: int = 3
     timeout_s: float = 120.0
+
+    def __post_init__(self) -> None:
+        for name in ("model", "effort"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        for name in ("max_tokens", "max_attempts"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.fallbacks is not None and not isinstance(self.fallbacks, str):
+            raise ValueError("fallbacks must be a string or None")
+        if (
+            isinstance(self.timeout_s, bool)
+            or not isinstance(self.timeout_s, (int, float))
+            or not math.isfinite(self.timeout_s)
+            or self.timeout_s <= 0
+        ):
+            raise ValueError("timeout_s must be a positive number of seconds")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -184,11 +205,22 @@ class Interpretation:
         return value
 
 
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _model_of(side: Any) -> str | None:
+    return _text(side.get("model")) if isinstance(side, dict) else None
+
+
 def interpret_response(raw_response: str) -> Interpretation:
-    """Read a Messages API response body without the SDK, so recordings replay offline."""
+    """Read a Messages API response body without the SDK, so recordings replay offline.
+
+    Any body yields an Interpretation or a ModelOutputError: a field of an
+    unexpected type reads as absent, and the raw body stays in the record."""
     try:
-        body = json.loads(raw_response)
-    except json.JSONDecodeError as exc:
+        body = strict_loads(raw_response)
+    except (ValueError, RecursionError) as exc:
         raise ModelOutputError("unexpected_response", f"response body is not JSON: {exc}") from exc
     if (
         not isinstance(body, dict)
@@ -203,15 +235,15 @@ def interpret_response(raw_response: str) -> Interpretation:
         if block.get("type") == "text" and isinstance(block.get("text"), str)
     ]
     fallbacks = tuple(
-        {"from": (block.get("from") or {}).get("model"), "to": (block.get("to") or {}).get("model")}
+        {"from": _model_of(block.get("from")), "to": _model_of(block.get("to"))}
         for block in blocks
         if block.get("type") == "fallback"
     )
     usage = body.get("usage")
     return Interpretation(
-        message_id=body.get("id"),
-        served_model=body.get("model"),
-        stop_reason=body.get("stop_reason"),
+        message_id=_text(body.get("id")),
+        served_model=_text(body.get("model")),
+        stop_reason=_text(body.get("stop_reason")),
         stop_details=body.get("stop_details"),
         usage=usage if isinstance(usage, dict) else None,
         fallbacks=fallbacks,
@@ -233,8 +265,8 @@ def parse_output(interpretation: Interpretation) -> Any:
             f"the response has no text block (stop_reason={interpretation.stop_reason!r})",
         )
     try:
-        return json.loads(interpretation.output_text)
-    except json.JSONDecodeError as exc:
+        return strict_loads(interpretation.output_text)
+    except (ValueError, RecursionError) as exc:
         raise ModelOutputError("invalid_json", f"the output text is not JSON: {exc}") from exc
 
 

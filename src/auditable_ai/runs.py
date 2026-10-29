@@ -32,6 +32,7 @@ from auditable_ai.errors import ExtractionValidationError, ProvenanceError, Temp
 from auditable_ai.extraction import VALIDATOR_VERSION, EvidenceExtractor, ExtractionResult
 from auditable_ai.figure_task import TASK_VERSION, prompt_sha256, template_sha256
 from auditable_ai.pricing import estimate_cost
+from auditable_ai.temporal import require_timezone_aware
 
 RECORD_TYPE = "model_extraction_run"
 RECORD_VERSION = 1
@@ -80,6 +81,7 @@ def run_model_extraction(
         document, settings, transport=transport, clock=clock, sleep=sleep
     )
     started = clock()
+    require_timezone_aware("clock()", started)
     run_id = (
         run_id or f"{document.document_version_id}--{settings.model}--{started:%Y%m%dT%H%M%S%fZ}"
     )
@@ -137,13 +139,16 @@ def run_model_extraction(
 def write_record(
     record: dict[str, Any], directory: Path, *, clock: Callable[[], datetime] = _utc_now
 ) -> Path:
-    """Write a record to a new file; an existing record is never replaced."""
+    """Write a record to a new file; an existing record is never replaced.
+
+    The record is serialized before the file is created, so a record that
+    cannot be written leaves no partial file behind."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{re.sub(r'[^A-Za-z0-9._-]', '_', record['run_id'])}.json"
     written = {**record, "record_written_at": clock().isoformat()}
+    text = json.dumps(written, indent=2, allow_nan=False) + "\n"
     with path.open("x", encoding="utf-8") as stream:
-        json.dump(written, stream, indent=2, allow_nan=False)
-        stream.write("\n")
+        stream.write(text)
     return path
 
 

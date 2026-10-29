@@ -1,13 +1,15 @@
 """Run records keep what is needed to audit or replay a model call; failures stay diagnosable."""
 
+import json
 import unittest
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from auditable_ai.anthropic_adapter import ClaudeSettings, ProviderCallError, sha256_text
 from auditable_ai.dataset import load_dataset
-from auditable_ai.errors import ProvenanceError
+from auditable_ai.errors import ProvenanceError, TemporalIntegrityError
 from auditable_ai.figure_task import SYSTEM_PROMPT, prompt_sha256
 from auditable_ai.runs import read_record, replay_record, run_model_extraction, write_record
 from tests.provider_fixtures import (
@@ -96,6 +98,58 @@ class RunRecords(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 write_record(record, Path(tmp) / "runs", clock=fixed_clock)
             self.assertEqual(path.read_bytes(), original)
+
+    def test_a_response_with_malformed_metadata_is_still_recorded_and_written(self):
+        body = json.dumps(
+            {
+                "type": "message",
+                "model": ["claude-opus-5-5"],
+                "content": [
+                    {"type": "fallback", "from": 1},
+                    {"type": "text", "text": json.dumps(call_center_output())},
+                ],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": [None], "output_tokens": 0},
+            }
+        )
+        record = run_with(response(body))
+        self.assertEqual(record["status"], "completed")
+        self.assertFalse(record["served_model_matches_request"])
+        self.assertEqual(record["cost"]["status"], "unavailable")
+        with TemporaryDirectory() as tmp:
+            written = read_record(write_record(record, Path(tmp), clock=fixed_clock))
+        self.assertEqual(written["exchange"]["raw_response"], body)
+
+    def test_a_response_with_non_standard_json_is_classified_and_recorded(self):
+        body = message_body(call_center_output()).replace(
+            '"input_tokens": 900', '"input_tokens": NaN'
+        )
+        record = run_with(response(body))
+        self.assertEqual(
+            (record["status"], record["diagnostics"]["kind"]),
+            ("malformed_output", "unexpected_response"),
+        )
+        with TemporaryDirectory() as tmp:
+            written = read_record(write_record(record, Path(tmp), clock=fixed_clock))
+        self.assertEqual(written["exchange"]["raw_response"], body)
+
+    def test_a_record_that_cannot_be_serialized_leaves_no_file(self):
+        record = run_with(response(message_body(call_center_output())))
+        record["exchange"]["latency_ms"] = float("nan")
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                write_record(record, Path(tmp), clock=fixed_clock)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_a_clock_without_a_utc_offset_is_refused_before_any_call(self):
+        transport = ScriptedTransport(response(message_body(call_center_output())))
+        with self.assertRaises(TemporalIntegrityError):
+            run_model_extraction(
+                load_dataset().document("eval-call-center-v1"),
+                transport=transport,
+                clock=lambda: datetime(2026, 10, 28, 12, 0),
+            )
+        self.assertEqual(transport.requests, [])
 
 
 class Replay(unittest.TestCase):
