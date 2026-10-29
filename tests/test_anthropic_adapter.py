@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import unittest
+from unittest import mock
 
 from auditable_ai.anthropic_adapter import (
     AnthropicTransport,
@@ -48,6 +49,18 @@ class RequestConstruction(unittest.TestCase):
         request = build_request(call_center(), ClaudeSettings(fallbacks=None))
         self.assertTrue({"betas", "fallbacks"}.isdisjoint(request))
 
+    def test_settings_are_checked_when_created(self):
+        for field, value in (
+            ("model", ""),
+            ("effort", None),
+            ("max_tokens", 0),
+            ("max_attempts", True),
+            ("timeout_s", float("nan")),
+            ("fallbacks", 3),
+        ):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                ClaudeSettings(**{field: value})
+
 
 class ResponseInterpretation(unittest.TestCase):
     def test_output_usage_and_fallback_switches_are_read_without_the_sdk(self):
@@ -75,6 +88,58 @@ class ResponseInterpretation(unittest.TestCase):
                 with self.assertRaises(ModelOutputError) as caught:
                     interpret_response(body)
                 self.assertEqual(caught.exception.kind, "unexpected_response")
+
+    def test_metadata_of_an_unexpected_type_reads_as_absent(self):
+        body = json.dumps(
+            {
+                "type": "message",
+                "id": 7,
+                "model": ["claude-opus-5-5"],
+                "stop_reason": {"reason": "end_turn"},
+                "content": [
+                    {"type": "fallback", "from": 1, "to": {"model": 2}},
+                    {"type": "text", "text": "{}"},
+                ],
+                "usage": "plenty",
+            }
+        )
+        interpretation = interpret_response(body)
+        self.assertEqual(
+            (
+                interpretation.message_id,
+                interpretation.served_model,
+                interpretation.stop_reason,
+                interpretation.usage,
+            ),
+            (None, None, None, None),
+        )
+        self.assertEqual(interpretation.fallbacks, ({"from": None, "to": None},))
+        self.assertEqual(parse_output(interpretation), {})
+
+    def test_non_standard_or_unparseable_json_is_classified_not_raised(self):
+        body = message_body({"facts": []}).replace('"output_tokens": 300', '"output_tokens": NaN')
+        for unparseable in (body, "[" * 100_000):
+            with self.subTest(body=unparseable[:20]), self.assertRaises(ModelOutputError) as caught:
+                interpret_response(unparseable)
+            self.assertEqual(caught.exception.kind, "unexpected_response")
+        for text in ('{"confidence": NaN}', '{"confidence": -Infinity}', "[" * 100_000):
+            with self.subTest(text=text[:20]), self.assertRaises(ModelOutputError) as caught:
+                parse_output(interpret_response(message_body(text=text)))
+            self.assertEqual(caught.exception.kind, "invalid_json")
+
+    def test_input_too_deeply_nested_to_parse_is_classified_not_raised(self):
+        # How deep the JSON parser can go depends on the Python version, so this
+        # makes it fail the way it does on deeply nested input.
+        interpretation = interpret_response(message_body(text="[]"))
+        too_deep = RecursionError("maximum recursion depth exceeded while decoding")
+        with mock.patch("auditable_ai.anthropic_adapter.strict_loads", side_effect=too_deep):
+            for kind, parse in (
+                ("unexpected_response", lambda: interpret_response(message_body(text="[]"))),
+                ("invalid_json", lambda: parse_output(interpretation)),
+            ):
+                with self.subTest(kind=kind), self.assertRaises(ModelOutputError) as caught:
+                    parse()
+                self.assertEqual(caught.exception.kind, kind)
 
 
 class RetryPolicy(unittest.TestCase):

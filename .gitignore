@@ -9,6 +9,8 @@ dist/
 htmlcov/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.hypothesis/
 .env
 .env.*
 reports/

@@ -1,13 +1,16 @@
 """Run records keep what is needed to audit or replay a model call; failures stay diagnosable."""
 
+import json
+import math
 import unittest
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from auditable_ai.anthropic_adapter import ClaudeSettings, ProviderCallError, sha256_text
 from auditable_ai.dataset import load_dataset
-from auditable_ai.errors import ProvenanceError
+from auditable_ai.errors import ProvenanceError, TemporalIntegrityError
 from auditable_ai.figure_task import SYSTEM_PROMPT, prompt_sha256
 from auditable_ai.runs import read_record, replay_record, run_model_extraction, write_record
 from tests.provider_fixtures import (
@@ -97,6 +100,89 @@ class RunRecords(unittest.TestCase):
                 write_record(record, Path(tmp) / "runs", clock=fixed_clock)
             self.assertEqual(path.read_bytes(), original)
 
+    def test_a_response_with_malformed_metadata_is_still_recorded_and_written(self):
+        body = json.dumps(
+            {
+                "type": "message",
+                "model": ["claude-opus-5-5"],
+                "content": [
+                    {"type": "fallback", "from": 1},
+                    {"type": "text", "text": json.dumps(call_center_output())},
+                ],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": [None], "output_tokens": 0},
+            }
+        )
+        record = run_with(response(body))
+        self.assertEqual(record["status"], "completed")
+        self.assertFalse(record["served_model_matches_request"])
+        self.assertEqual(record["cost"]["status"], "unavailable")
+        with TemporaryDirectory() as tmp:
+            written = read_record(write_record(record, Path(tmp), clock=fixed_clock))
+        self.assertEqual(written["exchange"]["raw_response"], body)
+
+    def test_a_response_with_non_standard_json_is_classified_and_recorded(self):
+        body = message_body(call_center_output()).replace(
+            '"input_tokens": 900', '"input_tokens": NaN'
+        )
+        record = run_with(response(body))
+        self.assertEqual(
+            (record["status"], record["diagnostics"]["kind"]),
+            ("malformed_output", "unexpected_response"),
+        )
+        with TemporaryDirectory() as tmp:
+            written = read_record(write_record(record, Path(tmp), clock=fixed_clock))
+        self.assertEqual(written["exchange"]["raw_response"], body)
+
+    def test_a_record_that_cannot_be_serialized_leaves_no_file(self):
+        record = run_with(response(message_body(call_center_output())))
+        record["exchange"]["latency_ms"] = float("nan")
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                write_record(record, Path(tmp), clock=fixed_clock)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_a_clock_without_a_utc_offset_is_refused_before_any_call(self):
+        transport = ScriptedTransport(response(message_body(call_center_output())))
+        with self.assertRaises(TemporalIntegrityError):
+            run_model_extraction(
+                load_dataset().document("eval-call-center-v1"),
+                transport=transport,
+                clock=lambda: datetime(2026, 10, 28, 12, 0),
+            )
+        self.assertEqual(transport.requests, [])
+
+    def test_reading_refuses_a_malformed_record_and_says_why(self):
+        record = run_with(response(message_body(call_center_output())))
+        exchange, timestamps = record["exchange"], record["timestamps"]
+        cases = [
+            ("not a model_extraction_run record", [record]),
+            ("not a model_extraction_run record", {**record, "record_type": "report"}),
+            ("unsupported record_version 2", {**record, "record_version": 2}),
+            ("run_id must be a non-empty string", {**record, "run_id": ""}),
+            (
+                "served_model_matches_request is missing",
+                {k: v for k, v in record.items() if k != "served_model_matches_request"},
+            ),
+            (
+                "exchange.latency_ms must be a non-negative number or null",
+                {**record, "exchange": {**exchange, "latency_ms": "fast"}},
+            ),
+            (
+                "timestamps.extracted_at must be a timestamp with a UTC offset",
+                {**record, "timestamps": {**timestamps, "extracted_at": "2026-10-28T12:00:00"}},
+            ),
+            ("NaN is not valid JSON", {**record, "exchange": {**exchange, "latency_ms": math.nan}}),
+        ]
+        with TemporaryDirectory() as tmp:
+            for number, (reason, value) in enumerate(cases):
+                path = Path(tmp, f"record-{number}.json")
+                path.write_text(json.dumps(value), encoding="utf-8")
+                with self.subTest(reason=reason, case=number):
+                    with self.assertRaisesRegex(ValueError, reason) as caught:
+                        read_record(path)
+                    self.assertIn(str(path), str(caught.exception))
+
 
 class Replay(unittest.TestCase):
     def test_replay_reproduces_the_recorded_outcome_without_a_model_call(self):
@@ -144,3 +230,17 @@ class Replay(unittest.TestCase):
         replay = replay_record(record)
         self.assertEqual(replay["status"], "not_replayable")
         self.assertEqual(replay["recorded_diagnostics"]["status_code"], 400)
+
+    def test_replay_runs_under_the_recorded_run_id_and_reproduces_the_stored_result(self):
+        record = run_with(response(message_body(call_center_output())))
+        replay = replay_record(record)
+        self.assertEqual(replay["differences"], [])
+        for stored, replayed in zip(record["result"]["claims"], replay["result"]["claims"]):
+            self.assertEqual(replayed, stored)
+        relabeled = {**record, "status": "refused"}
+        self.assertEqual(replay_record(relabeled)["differences"], ["status"])
+
+    def test_replay_refuses_a_malformed_record(self):
+        record = run_with(response(message_body(call_center_output())))
+        with self.assertRaisesRegex(ValueError, "malformed run record: timestamps"):
+            replay_record({**record, "timestamps": None})

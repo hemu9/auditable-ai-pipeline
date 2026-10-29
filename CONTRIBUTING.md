@@ -1,6 +1,8 @@
 # Contributing
 
-Use Python 3.10+ and install with `python -m pip install -e '.[dev]'`. Run `ruff check .`, `ruff format --check .`, `python -m unittest discover -s tests -t . -v` and `auditable-ai check-fixtures` before proposing a change. `python -m build` checks distribution packaging. Development-tool versions are pinned in `pyproject.toml`.
+Use Python 3.10+ and install with `python -m pip install -e '.[dev,claude]'`. Run `ruff check .`, `ruff format --check .`, `mypy`, `python -m unittest discover -s tests -t . -v` and `auditable-ai check-fixtures` before proposing a change. `python -m build` checks distribution packaging. Development-tool versions are pinned in `pyproject.toml`.
+
+When a change adds or alters a guarantee, write a test that fails without it and add an entry to `MUTATIONS` in `tools/mutation_check.py`, then run `python tools/mutation_check.py`. CI fails if any mutation survives, or if a change leaves an entry's find text stale. [Testing notes](docs/testing.md) describe the property-based tests and the mutation check.
 
 Preserve the distinction between public source availability and system recording history. Never overwrite version identities or resolve revision ties by insertion order. New backends must share the temporal resolver and `validate_chunk_registration`, and subclass the repository contract tests in `tests/test_temporal.py` and `tests/test_documents.py`.
 

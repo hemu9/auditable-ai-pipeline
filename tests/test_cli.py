@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from auditable_ai.cli import main
+from auditable_ai.cli import main, write_new_report
 from auditable_ai.dataset import load_dataset
 from auditable_ai.runs import run_model_extraction, write_record
 from auditable_ai.scenarios import check_cases, fixture_data
@@ -68,6 +68,44 @@ class ModelRunCommands(unittest.TestCase):
         self.assertIn("matches recorded outcome: yes", output.getvalue())
         self.assertEqual((report["origin"], report["model_calls"]), ("replayed_recording", 0))
 
+    def test_evaluate_and_replay_refuse_a_malformed_record_file_and_say_why(self):
+        record = run_model_extraction(
+            load_dataset().document("eval-call-center-v1"),
+            transport=ScriptedTransport(response(message_body(call_center_output()))),
+            clock=fixed_clock,
+        )
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "run.json")
+            path.write_text(json.dumps({**record, "run_id": 7}), encoding="utf-8")
+            for command in (
+                ["evaluate", "--system", "recorded", "--records", tmp],
+                ["replay", str(path)],
+            ):
+                errors = StringIO()
+                with self.subTest(command=command[0]):
+                    with redirect_stdout(StringIO()), redirect_stderr(errors):
+                        self.assertEqual(main(command), 2)
+                    self.assertIn(f"{path}: malformed run record: run_id", errors.getvalue())
+
+    def test_numeric_options_are_checked_before_anything_is_sent(self):
+        extract = ["extract", "--dataset-document", "eval-call-center-v1", "--live"]
+        for arguments in (
+            [*extract, "--timeout", "nan"],
+            [*extract, "--timeout", "-1"],
+            [*extract, "--max-tokens", "0"],
+            [*extract, "--max-attempts", "0"],
+            ["evaluate", "--system", "live", "--live", "--reps", "0"],
+        ):
+            with self.subTest(arguments=arguments[-2:]):
+                with (
+                    redirect_stderr(StringIO()),
+                    mock.patch("auditable_ai.cli.AnthropicTransport") as sdk,
+                    self.assertRaises(SystemExit) as caught,
+                ):
+                    main(arguments)
+                self.assertEqual(caught.exception.code, 2)
+                sdk.assert_not_called()
+
 
 class PublicWalkthrough(unittest.TestCase):
     def test_all_scripted_validator_cases_match_their_declared_behavior(self):
@@ -105,6 +143,13 @@ class PublicWalkthrough(unittest.TestCase):
             original = path.read_bytes()
             self.assertEqual(main(["demo", "--output", str(path)]), 2)
             self.assertEqual(path.read_bytes(), original)
+
+    def test_a_report_that_cannot_be_serialized_leaves_no_file(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp, "report.json")
+            with self.assertRaises(ValueError):
+                write_new_report(path, {"latency_ms": float("nan")})
+            self.assertFalse(path.exists())
 
     def test_unwritable_report_path_is_a_clear_error(self):
         errors = StringIO()

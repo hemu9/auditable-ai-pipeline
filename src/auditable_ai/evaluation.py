@@ -23,9 +23,10 @@ from auditable_ai.dataset import (
     numbers_in,
     register,
 )
-from auditable_ai.extraction import EvidenceExtractor
+from auditable_ai.extraction import VALIDATOR_VERSION, EvidenceExtractor
 from auditable_ai.figure_task import CLAIM_TYPE_STATUS, TASK_VERSION
-from auditable_ai.runs import replay_record, validated_outcome
+from auditable_ai.pricing import PRICES_RETRIEVED_ON, estimate_cost
+from auditable_ai.runs import check_record, replay_record, validated_outcome
 
 RUBRIC_VERSION = "figure-rubric-v1"
 SUPPORTED = "SUPPORTED"
@@ -76,7 +77,9 @@ def _reference(document: DatasetDocument, chunk_id: str) -> dict[str, Any]:
     }
 
 
-def _response(document: DatasetDocument, facts: list, unknowns: list) -> dict[str, Any]:
+def _response(
+    document: DatasetDocument, facts: list[dict[str, Any]], unknowns: list[str]
+) -> dict[str, Any]:
     return {
         "facts": facts,
         "inferences": [],
@@ -379,8 +382,34 @@ def offline_entries(system: str, documents: Iterable[DatasetDocument]) -> list[d
     return entries
 
 
+def _integrity_problem(
+    record: Mapping[str, Any], replay: Mapping[str, Any], served_as_requested: bool | None
+) -> str | None:
+    """Why a well-formed record contradicts its own hash-checked content, if it does."""
+    if replay["status"] == "not_replayable":
+        if record["status"] == "provider_error":
+            return None
+        return f"the record reports status {record['status']!r} but holds no provider response"
+    if record["validator_version"] == VALIDATOR_VERSION and replay["differences"]:
+        stored = ", ".join(replay["differences"])
+        return f"replay under validator {VALIDATOR_VERSION} does not reproduce the stored {stored}"
+    if record["served_model_matches_request"] != served_as_requested:
+        return "served_model_matches_request disagrees with the recorded response"
+    return None
+
+
 def record_entries(records: Iterable[Mapping[str, Any]], dataset: Dataset) -> list[dict[str, Any]]:
-    """Replay recorded model runs (no model calls) and turn them into scoring entries."""
+    """Replay recorded model runs (no model calls) and turn them into scoring entries.
+
+    A malformed record raises ValueError. For the rest, the replayed hash-checked
+    response supplies the result, token usage, served model and cost; latency is
+    a measurement, so it comes from the record as written. A record whose content
+    fails its hashes, or whose stored outcome or summary contradicts that content,
+    is an integrity failure and is never scored."""
+    records = list(records)
+    for record in records:
+        check_record(record)
+    known = {document.document_version_id: document for document in dataset.documents}
     entries = []
     reps: Counter[str] = Counter()
     for record in sorted(records, key=lambda item: item["run_id"]):
@@ -391,14 +420,14 @@ def record_entries(records: Iterable[Mapping[str, Any]], dataset: Dataset) -> li
             "rep": reps[document_id],
             "run_id": record["run_id"],
             "origin": record["origin"],
-            "latency_ms": (record.get("exchange") or {}).get("latency_ms"),
-            "usage": (record.get("response") or {}).get("usage"),
-            "cost": record.get("cost"),
-            "served_model": (record.get("response") or {}).get("served_model"),
+            "latency_ms": (record["exchange"] or {}).get("latency_ms"),
+            "usage": None,
+            "cost": None,
+            "served_model": None,
         }
         try:
             replay = replay_record(record)
-        except (KeyError, ValueError) as exc:  # includes ProvenanceError for tampered records
+        except ValueError as exc:  # ProvenanceError or TemporalIntegrityError: altered content
             message = f"{type(exc).__name__}: {exc}"
             entries.append(
                 {
@@ -409,27 +438,37 @@ def record_entries(records: Iterable[Mapping[str, Any]], dataset: Dataset) -> li
                 }
             )
             continue
-        if record["task"]["version"] != TASK_VERSION:
-            status = "task_version_mismatch"
+        response = replay.get("response")
+        served_as_requested = None
+        if response:
+            served_as_requested = response["served_model"] == record["settings"]["model"]
+            entry["usage"] = response["usage"]
+            entry["served_model"] = response["served_model"]
+            entry["cost"] = estimate_cost(
+                response["usage"], response["served_model"], stop_reason=response["stop_reason"]
+            )
+        diagnostics = replay.get("diagnostics") or record.get("diagnostics")
+        problem = _integrity_problem(record, replay, served_as_requested)
+        if problem:
+            status, diagnostics = "integrity_error", {"message": problem}
         elif replay["status"] == "not_replayable":
             status = record["status"]
-        elif replay["status"] == "completed" and record["served_model_matches_request"] is False:
+        elif document_id not in known:
+            status = "unknown_document"
+        elif known[document_id].text != " ".join(record["document"]["sentences"]):
+            status = "document_mismatch"
+        elif record["task"]["version"] != TASK_VERSION:
+            status = "task_version_mismatch"
+        elif replay["status"] == "completed" and served_as_requested is False:
             status = "served_model_mismatch"
         else:
             status = replay["status"]
-        try:
-            gold = dataset.document(document_id)
-        except KeyError:
-            status = "unknown_document"
-        else:
-            if gold.text != " ".join(record["document"]["sentences"]):
-                status = "document_mismatch"
         entries.append(
             {
                 **entry,
                 "status": status,
                 "result": replay.get("result") if status == "completed" else None,
-                "diagnostics": replay.get("diagnostics") or record.get("diagnostics"),
+                "diagnostics": diagnostics,
                 "replay_matches_record": replay.get("matches_recorded_outcome"),
             }
         )
@@ -457,23 +496,38 @@ def _performance(scored: list[dict[str, Any]], *, model: bool) -> dict[str, Any]
     }
     if not model:
         return {"latency": timing, "tokens": None, "cost": "not applicable: no API call"}
-    usages = [entry["usage"] for entry in scored if entry["usage"]]
+    counted = [counts for counts in (_token_counts(entry["usage"]) for entry in scored) if counts]
     costs = [entry["cost"] for entry in scored if entry["cost"]]
     estimated = [cost["usd"] for cost in costs if cost["status"] == "estimated"]
     return {
         "latency": timing,
         "tokens": {
-            "input": sum(usage.get("input_tokens") or 0 for usage in usages),
-            "output": sum(usage.get("output_tokens") or 0 for usage in usages),
-            "cache_read": sum(usage.get("cache_read_input_tokens") or 0 for usage in usages),
+            "input": sum(counts[0] for counts in counted),
+            "output": sum(counts[1] for counts in counted),
+            "cache_read": sum(counts[2] for counts in counted),
+            "runs": len(counted),
         },
         "cost": {
             "estimated_usd": round(sum(estimated), 6),
             "runs_estimated": len(estimated),
             "runs_unavailable": len(costs) - len(estimated),
             "basis": "API-reported tokens x published list prices; not an invoice",
+            "prices_retrieved_on": PRICES_RETRIEVED_ON,
         },
     }
+
+
+def _token_counts(usage: Any) -> tuple[int, int, int] | None:
+    """Input, output and cache-read tokens, or None for usage that is absent or malformed."""
+    if not isinstance(usage, Mapping):
+        return None
+    names = ("input_tokens", "output_tokens", "cache_read_input_tokens")
+    values = [usage.get(name) or 0 for name in names]
+    if not all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+        return None
+    if min(values) < 0:
+        return None
+    return values[0], values[1], values[2]
 
 
 def build_report(

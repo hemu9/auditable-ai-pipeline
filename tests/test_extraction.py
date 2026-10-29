@@ -6,6 +6,7 @@ from dataclasses import replace
 from math import inf, nan
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from auditable_ai import (
     ClaimCategory,
@@ -453,6 +454,16 @@ class ExtractionBoundary(unittest.TestCase):
             nested = [nested]
         with self.assertRaises(ExtractionValidationError):
             extract({"facts": nested})
+
+    def test_a_fingerprint_failure_is_a_batch_error_and_stores_nothing(self):
+        # Which step fails first on deep input depends on the Python version, so
+        # this makes fingerprinting fail the way it does on such input.
+        bundle = setup()
+        too_deep = RecursionError("maximum recursion depth exceeded")
+        with mock.patch("auditable_ai.extraction.canonical_hash", side_effect=too_deep):
+            with self.assertRaises(ExtractionValidationError):
+                extract(valid_response(), bundle=bundle)
+        self.assertFalse(bundle[2].has_run("test-run"))
 
     def test_confidence_is_never_coerced_from_boolean_or_text(self):
         for confidence in (True, "0.9", -0.1, 1.1):
