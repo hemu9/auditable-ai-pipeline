@@ -112,7 +112,7 @@ Its output, from an actual run:
 ACCEPTED  57 of the 62 inspected buses passed. (accuracy NOT_VERIFIED)
 REJECTED  PROVENANCE_VIOLATION: unknown document version: 'regional-audit'
 UNKNOWN   Brake wear
-Audit record: response sha256 d3188922d91e, validator v1
+Audit record: response sha256 d3188922d91e, validator v2
 ```
 
 - The supported claim is accepted but marked `NOT_VERIFIED`: a real citation does not prove the statement.

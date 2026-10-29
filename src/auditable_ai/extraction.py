@@ -16,10 +16,15 @@ from typing import Any, Callable
 from auditable_ai._immutable import canonical_hash
 from auditable_ai.claims import Claim, ClaimCategory, ClaimRepository, EvidenceReference
 from auditable_ai.documents import RawDocumentContent, SourceDocument
-from auditable_ai.errors import ExtractionValidationError, ProvenanceError, TemporalIntegrityError
-from auditable_ai.temporal import require_timezone_aware
+from auditable_ai.errors import (
+    DuplicateRunError,
+    ExtractionValidationError,
+    ProvenanceError,
+    TemporalIntegrityError,
+)
+from auditable_ai.temporal import require_not_in_future, require_timezone_aware
 
-VALIDATOR_VERSION = "1"
+VALIDATOR_VERSION = "2"
 
 TOP_FIELDS = frozenset(
     {"facts", "inferences", "unknowns", "contradicting_evidence", "source_ids", "confidence"}
@@ -50,6 +55,10 @@ class RejectedItem:
     index: int
     reason: RejectionReason
     detail: str
+
+
+class _UnknownFieldError(ExtractionValidationError):
+    """Classifies an item rejection as UNKNOWN_FIELD rather than INVALID_ITEM."""
 
 
 def _json_default(value: Any) -> Any:
@@ -114,8 +123,10 @@ def _strings(value: Any, field: str) -> tuple[str, ...]:
 
 
 def _reference(raw: Any, declared: frozenset[str]) -> EvidenceReference:
-    if not isinstance(raw, dict) or set(raw) - REF_FIELDS:
-        raise ExtractionValidationError("evidence reference has invalid fields or shape")
+    if not isinstance(raw, dict):
+        raise ExtractionValidationError("evidence reference must be an object")
+    if set(raw) - REF_FIELDS:
+        raise _UnknownFieldError("evidence reference contains unknown fields")
     source_id = raw.get("source_id")
     if not isinstance(source_id, str) or not source_id or source_id not in declared:
         raise ExtractionValidationError("evidence source must appear in declared source_ids")
@@ -136,9 +147,11 @@ class EvidenceExtractor:
 
     The injected adapter receives raw text only. All evidence that reaches the
     claim repository is checked again against real immutable document versions.
-    Valid items can survive an invalid sibling. Batch-shape errors fail before
-    any claims are stored. A FACT without an explicit reference is attributed
-    to the input document; this attribution is exposed and is not verification.
+    Valid items can survive an invalid sibling, and accepted items are committed
+    together. A reused run id is refused before the adapter runs; batch-shape
+    errors fail before any claims are stored. A FACT without an explicit
+    reference is attributed to the input document; this attribution is exposed
+    and is not verification.
     """
 
     def __init__(
@@ -170,6 +183,10 @@ class EvidenceExtractor:
         ):
             if not isinstance(value, str) or not value.strip():
                 raise ExtractionValidationError(f"{field} must be a non-empty string")
+        if self.claims.has_run(run_id):
+            raise DuplicateRunError(
+                f"run_id {run_id!r} already has a committed result; refusing to run the adapter under a reused identity"
+            )
         registered = self.claims.documents.get_version(document.document_version_id)
         if registered != document:
             raise ProvenanceError(
@@ -181,6 +198,7 @@ class EvidenceExtractor:
             raise TemporalIntegrityError(
                 "extraction cannot precede the input's recording or availability"
             )
+        require_not_in_future("extracted_at", extracted_at, self.claims.clock)
 
         start = time.perf_counter()
         raw = self.extraction_fn(document.raw_content)
@@ -188,7 +206,8 @@ class EvidenceExtractor:
         try:
             raw_json = json.dumps(raw, sort_keys=True, separators=(",", ":"), allow_nan=False)
             parsed = json.loads(raw_json)
-        except (TypeError, ValueError) as exc:
+            response_hash = canonical_hash(parsed)
+        except (TypeError, ValueError, RecursionError) as exc:
             raise ExtractionValidationError("adapter output must be finite JSON data") from exc
         if not isinstance(parsed, dict) or set(parsed) - TOP_FIELDS:
             raise ExtractionValidationError(
@@ -218,13 +237,11 @@ class EvidenceExtractor:
         ):
             for index, item in enumerate(parsed.get(bucket, [])):
                 sequence += 1
-                reason = RejectionReason.INVALID_ITEM
                 try:
                     if not isinstance(item, dict):
                         raise ExtractionValidationError("claim item must be an object")
                     if set(item) - ITEM_FIELDS:
-                        reason = RejectionReason.UNKNOWN_FIELD
-                        raise ExtractionValidationError("claim item contains unknown fields")
+                        raise _UnknownFieldError("claim item contains unknown fields")
                     text = item.get("claim_text")
                     if not isinstance(text, str) or not text.strip():
                         raise ExtractionValidationError("claim_text must be non-empty")
@@ -263,16 +280,23 @@ class EvidenceExtractor:
                         contradicting_claim_ids=contradicting_ids,
                         missing_information=unknowns,
                     )
-                    self.claims.add(claim)
+                    self.claims.validate_evidence(claim)
                 except (ProvenanceError, TemporalIntegrityError) as exc:
                     rejected.append(
                         RejectedItem(bucket, index, RejectionReason.PROVENANCE_VIOLATION, str(exc))
                     )
-                except (ExtractionValidationError, ValueError) as exc:
-                    rejected.append(RejectedItem(bucket, index, reason, str(exc)))
+                except _UnknownFieldError as exc:
+                    rejected.append(
+                        RejectedItem(bucket, index, RejectionReason.UNKNOWN_FIELD, str(exc))
+                    )
+                except ExtractionValidationError as exc:
+                    rejected.append(
+                        RejectedItem(bucket, index, RejectionReason.INVALID_ITEM, str(exc))
+                    )
                 else:
                     accepted.append(claim)
 
+        self.claims.add_run(run_id, accepted)
         return ExtractionResult(
             claims=tuple(accepted),
             rejected_items=tuple(rejected),
@@ -284,7 +308,7 @@ class EvidenceExtractor:
             subject_id=subject_id,
             source_version_id=document.document_version_id,
             input_hash=document.content_hash,
-            response_hash=canonical_hash(parsed),
+            response_hash=response_hash,
             raw_response_json=raw_json,
             model_name=model_name,
             model_version=model_version,

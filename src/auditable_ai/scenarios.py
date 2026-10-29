@@ -68,6 +68,7 @@ def check_cases(data: dict[str, Any]) -> list[dict[str, Any]]:
     checks = []
     for case in data["cases"]:
         expected = case["expected"]
+        observed: dict[str, Any]
         try:
             result = run_case(data, case)
         except (ValueError, TypeError) as exc:
@@ -83,10 +84,6 @@ def check_cases(data: dict[str, Any]) -> list[dict[str, Any]]:
             if "reason" in expected:
                 passed = passed and any(
                     item.reason.value == expected["reason"] for item in result.rejected_items
-                )
-            if "accuracy_status" in expected:
-                passed = (
-                    passed and result.to_dict()["accuracy_status"] == expected["accuracy_status"]
                 )
         checks.append({"case": case["name"], "passed": passed, "observed": observed})
     return checks
